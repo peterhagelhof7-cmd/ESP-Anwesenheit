@@ -1,0 +1,16 @@
+#pragma once
+
+// ============================================================================
+// Kopiere diese Datei nach "config.h" (wird von Git ignoriert, siehe .gitignore).
+//
+// Laufzeitkonfiguration (Netzwerk, Passwoerter, ...) kommt aus config.json auf
+// LittleFS (siehe ConfigManager) - NICHT aus dieser Datei. Hier stehen nur
+// Werte, die zur Kompilierzeit feststehen muessen.
+// ============================================================================
+
+#define DEVICE_FIRMWARE_VERSION "0.1.0"
+
+// Projekt-Kennung fuer die OTA-Herkunftspruefung (siehe OtaManager.h/.cpp,
+// identischer Mechanismus wie in der Sensormeter-Familie) - verhindert, dass
+// versehentlich eine .bin eines anderen Projekts auf diesem Geraet installiert wird.
+#define FIRMWARE_PROJECT_ID "ESP-ANWESENHEIT"

@@ -1,0 +1,121 @@
+# Projektbeschreibung: Windows Login Monitor auf WT32-ETH01 Name ESP-Anwesenheit
+
+## Ziel
+
+Entwicklung eines zentralen Login-Monitors auf Basis eines **WT32-ETH01 (ESP32 mit Ethernet)**. Der ESP32 dient als HTTP-Server und empfängt Anmeldeereignisse von Windows-PCs im lokalen Netzwerk. Die Daten werden im Arbeitsspeicher gespeichert und über eine Weboberfläche bereitgestellt.
+
+## Funktionsweise
+
+Auf jedem Windows-PC läuft ein kleines PowerShell-Skript oder ein Windows-Dienst. Dieses überwacht die relevanten Windows-Ereignisse (z. B. Anmeldung, Abmeldung, Sperren, Entsperren, RDP-Verbindungen) und sendet bei jeder Statusänderung eine HTTP-POST-Anfrage an den WT32-ETH01.
+
+Der WT32-ETH01 verarbeitet die empfangenen Daten, aktualisiert den aktuellen Status des jeweiligen Rechners und speichert zusätzlich die letzten Ereignisse in einem Ringpuffer.
+
+## Erfasste Ereignisse
+
+* Lokale Anmeldung
+* RDP-Anmeldung
+* RDP-Verbindung getrennt
+* Benutzer abgemeldet
+* Bildschirm gesperrt
+* Bildschirm entsperrt
+Benutzer wechselt von Lokal auf RDP
+
+## Übertragene Daten
+
+Jeder Client sendet beispielsweise folgende Informationen:
+
+```json
+{
+  "computer": "PC-25",
+  "user": "user1",
+  "event": "login",
+  "logontype": "RDP",
+  "timestamp": "2026-07-29T10:15:22"
+}
+```
+
+## HTTP-API
+
+### POST /event
+
+Empfängt ein neues Ereignis.
+
+### GET /status
+
+Liefert den aktuellen Status aller bekannten Rechner.
+
+Beispiel:
+
+```json
+[
+  {
+    "computer":"PC-25",
+    "user":"user1",
+    "state":"RDP",
+    "lastUpdate":"10:15:22"
+  },
+  {
+    "computer":"PC-17",
+    "user":"admin",
+    "state":"Local",
+    "lastUpdate":"09:41:10"
+  }
+]
+```
+
+### GET /events
+
+Liefert die letzten gespeicherten Ereignisse (Ringpuffer).
+
+## Weboberfläche
+
+Der WT32-ETH01 stellt eine einfache HTML-Seite bereit.
+
+### Aktuelle, aktive Rechner Sitzungen
+
+| PC    | Benutzer | Status   | Letzte Änderung |
+| ----- | -------- | -------- | --------------- |
+| PC-25 | user1    | RDP      | 10:15           |
+| PC-17 | admin    | Lokal    | 09:41           |
+| PC-08 | user3    | Gesperrt | 10:02           |
+| PC-08 | Kein Benutzer   | Loginmaske | 10:05          |
+
+### Letzte Ereignisse
+
+| Zeit  | PC    | Benutzer | Ereignis         |
+| ----- | ----- | -------- | ---------------- |
+| 10:15 | PC-25 | user1    | RDP Anmeldung    |
+| 10:02 | PC-08 | user3    | Sperren          |
+| 09:41 | PC-17 | admin    | Lokale Anmeldung |
+
+Die Webseite aktualisiert sich automatisch (AJAX oder Server-Sent Events), sodass kein manuelles Neuladen erforderlich ist.
+Die Seite skaliert mit der Auflösung des Userclients
+
+## Datenspeicherung
+
+* Aktueller Status aller bekannten Rechner
+* Ringpuffer mit z. B. 500 Ereignissen
+* Speicherung ausschließlich im RAM
+alle 24h zusammenführen zu einem logins.csv welche 14 tage die werte hält, und nach login auf dem webserver downloadbar ist
+* Nach einem Neustart beginnt die tägliche Historie neu
+Persistente Speicherung auf SPIFFS/LittleFS für einstellungen und historie
+
+## Netzwerk
+
+* Ethernet (100 MBit)
+* Feste IP-Adresse oder DHCP
+* Kommunikation ausschließlich im lokalen Netzwerk
+* HTTP auf Port 80 (optional 8080)
+* Authentifizierung für die Weboberfläche bereich einstellungen
+einstellungsmöglicheiten auf der einstellungsseite:
+passwort (default user admin passwort admin)
+scan nach wlan netzwerken, setzten von festen IP adressen (mit fallback und ntp logik wie bei sm)
+reset (alles, einstellungen, oder Daten)
+OTA Firmware Update (wie bei SM)
+
+
+bonus ziele
+
+* Offline-Erkennung (Heartbeat der Clients)
+* Filter nach Benutzer oder Rechner
+SNMP abfrage nach SM vorbild (v1/2c) Name, IP, SSID, Signalstärke, WLAN IP, Interne temp
