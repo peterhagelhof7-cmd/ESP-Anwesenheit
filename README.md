@@ -50,6 +50,9 @@ Windows-PC N ─┘                          (RAM-Ringpuffer,
   (Einstellungen/Daten/alles)
 - SNMP v1/v2c read-only + fertiges Zabbix-Template (Systeminfo, Netzwerk,
   angemeldete Benutzer, Uptime, freier Heap)
+- Läuft auch auf Windows-RDS-Hosts: mehrere gleichzeitige Sitzungen auf
+  demselben Terminalserver bekommen automatisch eigene Zeilen statt sich
+  gegenseitig zu überschreiben (siehe `docs/entscheidungen.md`)
 
 ## Schnellstart
 

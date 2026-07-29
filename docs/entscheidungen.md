@@ -243,6 +243,38 @@ moeglich. Unkritisch, da die Web-UI Eintraege ab 15 Minuten Inaktivitaet
 ohnehin abblendet (siehe oben) und der naechste Login den Status wieder
 korrigiert.
 
+## RDS-Mehrfachsitzungs-Unterstuetzung (2026-07-29)
+
+Nutzerfrage: laeuft der Windows-Client auch auf einem Windows-RDS-Host
+(Remote Desktop Session Host, mehrere gleichzeitige Sitzungen auf demselben
+Rechner)? Antwort: der Scheduled-Task/`SessionSwitch`-Mechanismus selbst
+funktioniert dort unveraendert (Task Scheduler startet "Bei Anmeldung" pro
+Sitzung neu, `SystemEvents`/`WTSRegisterSessionNotification` ist intrinsisch
+sitzungsgebunden) - ABER `$env:COMPUTERNAME` allein identifiziert auf einem
+RDS-Host NICHT die einzelne Sitzung: alle gleichzeitig angemeldeten Kollegen
+haetten denselben Rechnernamen, `EventManager::applyToStatus` haette dadurch
+nur EINEN Status-Eintrag fuer den ganzen Host, jede neue Anmeldung wuerde die
+vorherige einfach ueberschreiben - fuer den erklaerten Zweck ("wer sitzt
+gerade wo") auf einem RDS-Host unbrauchbar.
+
+Fix in `client/windows/AnwesenheitAgent.ps1` (`Get-ComputerIdentifier`):
+Erkennung ueber `Win32_OperatingSystem.ProductType` (CIM, keine erhoehten
+Rechte noetig) - `1` (Workstation, z.B. Win10/11) laesst das `computer`-Feld
+unveraendert (dort ist ohnehin nur eine interaktive Sitzung gleichzeitig
+moeglich, RDP uebernimmt die bestehende Konsolensitzung statt eine zweite zu
+eroeffnen); `2`/`3` (Domain Controller/Server, u.a. RDS-Hosts) haengt
+`$env:SESSIONNAME` an (z.B. `RDSHOST01 (RDP-Tcp#5)`), damit jede Sitzung eine
+eigene Zeile bekommt. Bewusst NICHT ueber "laeuft gerade mehr als eine
+Sitzung" entschieden - ProductType steht sofort beim Skriptstart fest, ohne
+wiederholte Sitzungsabfrage, und aendert sich waehrend der Laufzeit nicht.
+
+Verifiziert (lokal, kein RDS-Host verfuegbar): Syntaxpruefung sauber, UND die
+Funktion isoliert mit echtem `ProductType` (Workstation, Ergebnis
+unveraendert `SPS-FLASH`) sowie mit simuliertem `ProductType=3`
+(Server/RDS, Ergebnis `SPS-FLASH (Console)`) tatsaechlich ausgefuehrt - nicht
+nur gelesen. Ein echter Test mit mehreren gleichzeitigen RDP-Sitzungen auf
+einem echten RDS-Host steht noch aus.
+
 ## Web-UI
 
 AJAX-Polling (alle 5s, `fetch()`) statt Server-Sent Events - konsistent mit

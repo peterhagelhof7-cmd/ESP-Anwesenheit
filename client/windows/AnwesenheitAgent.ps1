@@ -15,6 +15,14 @@
     Serveradresse kommt aus anwesenheit-client.json im selben Verzeichnis
     (wird von Install-AnwesenheitAgent.ps1 angelegt) - Default, falls die
     Datei fehlt: http://esp-anwesenheit.local/event
+
+    Auf einem Windows-Server mit RDS-Rolle (mehrere gleichzeitige Sitzungen
+    auf demselben Rechner moeglich) wird der Rechnername im Payload um die
+    Sitzungskennung ergaenzt (z.B. "RDSHOST01 (RDP-Tcp#5)"), damit jede
+    Sitzung eine eigene Zeile in der Weboberflaeche bekommt statt sich
+    gegenseitig zu ueberschreiben. Auf normalem Client-Windows (Win10/11,
+    immer nur eine Sitzung gleichzeitig) bleibt der reine Rechnername
+    unveraendert - siehe Get-ComputerIdentifier.
 #>
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -60,6 +68,44 @@ function Get-CurrentLogonType {
     return "Local"
 }
 
+# Auf normalem Client-Windows (Win10/11) ist immer nur EINE interaktive
+# Sitzung gleichzeitig moeglich - eine eingehende RDP-Verbindung uebernimmt
+# die bestehende Konsolensitzung, statt eine zweite zu eroeffnen. Dort bleibt
+# der reine Rechnername ($env:COMPUTERNAME) weiterhin eindeutig (z.B.
+# "PC-25"), unveraendertes Verhalten.
+#
+# Auf einem Windows-Server mit RDS-Rolle (Remote Desktop Session Host) gilt
+# das NICHT - dort koennen mehrere Kollegen gleichzeitig eigene Sitzungen auf
+# demselben physischen Rechner haben. $env:COMPUTERNAME allein wuerde alle
+# auf denselben Status-Eintrag in EventManager zusammenfallen lassen (jede
+# neue Anmeldung wuerde die vorherige ueberschreiben statt eine eigene Zeile
+# zu bekommen) - genau das war der Anlass fuer diese Ergaenzung. Erkennung
+# ueber Win32_OperatingSystem.ProductType (1=Workstation, 2=Domain
+# Controller, 3=Server) statt z.B. ueber "laeuft gerade mehr als eine
+# Sitzung" - liefert ein stabiles, sofort beim Start feststehendes Ergebnis
+# ohne wiederholte Sitzungsabfrage, und braucht keine erhoehten Rechte.
+# $env:SESSIONNAME liefert je Sitzung einen eindeutigen Wert ("Console" bzw.
+# "RDP-Tcp#<n>").
+function Get-ComputerIdentifier {
+    try {
+        $productType = (Get-CimInstance -ClassName Win32_OperatingSystem -Property ProductType -ErrorAction Stop).ProductType
+    } catch {
+        # Im Zweifel (CIM nicht verfuegbar) wie Workstation behandeln -
+        # unveraendertes, bisheriges Verhalten statt eines Fehlers.
+        $productType = 1
+    }
+    if ($productType -eq 1) {
+        return $env:COMPUTERNAME
+    }
+    if ([string]::IsNullOrEmpty($env:SESSIONNAME)) {
+        return $env:COMPUTERNAME
+    }
+    return "$env:COMPUTERNAME ($env:SESSIONNAME)"
+}
+# Einmal beim Start ermittelt (aendert sich waehrend der Laufzeit einer
+# Sitzung nicht) statt bei jedem Send-AnwesenheitEvent neu abgefragt.
+$script:ComputerIdentifier = Get-ComputerIdentifier
+
 # Sendet ein Ereignis an den ESP-Anwesenheit-Monitor. Ein Fehlschlag (Geraet
 # nicht erreichbar, WLAN/LAN-Aussetzer, ESP gerade im OTA-Neustart) wird nach
 # einem Retry nur geloggt, nicht weiter eskaliert - der Server haelt seinen
@@ -72,7 +118,7 @@ function Send-AnwesenheitEvent {
         [string]$LogonType = ""
     )
     $payload = @{
-        computer  = $env:COMPUTERNAME
+        computer  = $script:ComputerIdentifier
         user      = $env:USERNAME
         event     = $EventType
         logontype = $LogonType
@@ -134,7 +180,7 @@ $script:SessionSwitchHandler = {
 # empfangen koennen) - kein eigenes Application.Run() noetig.
 [Microsoft.Win32.SystemEvents]::add_SessionSwitch($script:SessionSwitchHandler)
 
-Write-AgentLog "Agent gestartet (Server: $script:ServerUrl, Benutzer: $env:USERNAME)"
+Write-AgentLog "Agent gestartet (Server: $script:ServerUrl, Rechner: $script:ComputerIdentifier, Benutzer: $env:USERNAME)"
 
 # Initialer Login-Event: der Scheduled Task startet SELBST erst durch die
 # Anmeldung (Trigger "Bei Anmeldung", siehe Install-AnwesenheitAgent.ps1) -
