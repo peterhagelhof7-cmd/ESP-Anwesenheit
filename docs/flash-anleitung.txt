@@ -1,0 +1,100 @@
+================================================================
+ESP-Anwesenheit - Flash-Anleitung (WT32-ETH01 / ESP32-ETH01 V1.4)
+================================================================
+Stand: 2026-07-29. Pinbezeichnungen aus dem Foto WT32-ETH01-back.png
+(Rueckseite des Moduls, Aufdruck "ESP32-ETH01 V1.4"). Noch NICHT an
+echter Hardware getestet - vor dem ersten Flash sorgfaeltig pruefen.
+
+----------------------------------------------------------------
+1. Pin-Uebersicht (laut Aufdruck auf der Platinenrueckseite)
+----------------------------------------------------------------
+
+Linke Spalte (von oben nach unten):
+  TXO, RXO, IO0, IO39, IO36, IO15, IO14, IO12, IO35, IO4, IO2, GND
+
+Rechte Spalte (von oben nach unten):
+  EN, GND, 3V3, EN, CFG, 485_EN, RXD, TXD, GND, 3V3, GND, 5V, LINK
+
+Hinweis: EN kommt zweimal vor (beide Pads liegen auf demselben Netz,
+beide sind gleichwertig nutzbar). RXD/TXD (rechte Spalte) sind
+dieselben UART0-Signale wie TXO/RXO (linke Spalte), nur an anderer
+Stelle herausgefuehrt.
+
+CFG und 485_EN sind auf diesem Boardtyp (WT32-ETH01) laut vorheriger
+Recherche im Schwesterprojekt "sensormeter" NICHT die ESP32-Boot-
+Strap-Pins, sondern GPIO32 (CFG) und GPIO33 (485_EN) - normale
+GPIOs fuer eine optionale RS485-Zusatzbeschaltung, die dieses Projekt
+nicht nutzt. Fuer den Flash-Vorgang bitte NICHT verwenden.
+
+----------------------------------------------------------------
+2. Pins fuer den Flash-Adapter (USB-TTL, z.B. CP2102 oder CH340)
+----------------------------------------------------------------
+
+Nur diese vier/fuenf Pins an den Adapter anschliessen:
+
+  Adapter GND  --> Board GND   (ein beliebiger GND-Pin)
+  Adapter TXD  --> Board RXO   (linke Spalte) bzw. Board RXD (rechte Spalte, gleiches Signal)
+  Adapter RXD  --> Board TXO   (linke Spalte) bzw. Board TXD (rechte Spalte, gleiches Signal)
+
+Fuer den manuellen Boot-/Download-Modus zusaetzlich Zugriff auf:
+
+  IO0  (linke Spalte)  - beim Reset auf GND ziehen = Bootloader-Modus
+  EN   (rechte Spalte, oben ODER die vierte Position - egal welche) - kurz auf GND ziehen = Reset
+
+WICHTIG: Die 5V/3.3V-Ausgaenge des USB-Adapters NICHT zur Versorgung
+des Boards verwenden - die meisten einfachen CP2102-/CH340-Adapter
+liefern dafuer zu wenig Strom. Das Board waehrend des Flashens separat
+mit Strom versorgen (siehe Abschnitt 3).
+
+----------------------------------------------------------------
+3. Pins fuer die spaetere USB-Stromversorgung (Normalbetrieb)
+----------------------------------------------------------------
+
+Im Normalbetrieb (nach dem Flashen, ohne Adapter) braucht das Board
+nur zwei Pins fuer die Stromversorgung ueber ein normales 5V-USB-
+Netzteil/-Kabel (nur die Strom-Adern, nicht die Daten-Adern):
+
+  5V   (rechte Spalte, direkt ueber LINK)
+  GND  (rechte Spalte, direkt ueber dem 5V-Pin)
+
+Das Board laeuft laut Datenblatt mit 5V ODER 3,3V - niemals beide
+gleichzeitig anschliessen. Fuer den Ethernet-Betrieb (LAN8720-PHY,
+hoeherer Strombedarf als reiner WLAN-Betrieb) wird 5V empfohlen.
+
+----------------------------------------------------------------
+4. Manueller Boot-Modus (falls der Adapter kein DTR/RTS hat)
+----------------------------------------------------------------
+
+Viele einfache USB-TTL-Adapter bringen nur TXD/RXD/GND heraus, kein
+DTR/RTS fuer den automatischen Boot-Modus-Wechsel. In dem Fall manuell:
+
+  1. Verkabelung wie in Abschnitt 2 herstellen, Board separat mit Strom
+     versorgen (Abschnitt 3, oder provisorisch ueber ein Labornetzteil).
+  2. IO0 auf GND ziehen UND HALTEN (Taster oder Jumper) - erst jetzt
+     Schritt 3 ausloesen.
+  3. EN kurz auf GND ziehen und wieder loslassen (kurzer Reset-Puls).
+     IO0 bleibt dabei weiterhin auf GND.
+  4. Optional pruefen: seriellen Monitor oeffnen (115200 Baud) - im
+     Bootloader-Modus meldet sich der Chip mit "waiting for download".
+  5. Flash-Befehl starten (siehe scripts/flash.ps1), IO0 bleibt
+     waehrend des GESAMTEN Uploads auf GND.
+  6. Erst nach der Erfolgsmeldung IO0 wieder loslassen - danach startet
+     das Board normal mit der neuen Firmware.
+
+Reihenfolge ist entscheidend, exakte Sekunden nicht.
+
+----------------------------------------------------------------
+5. Flashen
+----------------------------------------------------------------
+
+Windows: scripts/flash.ps1 ausfuehren (installiert bei Bedarf Python/
+Git/PlatformIO, baut die Firmware und flasht sie). Siehe dortige Hilfe
+(Get-Help .\scripts\flash.ps1 -Full) fuer Parameter wie -Port/-SkipUpload.
+
+Alternativ manuell (aus firmware/):
+  pio run --target upload
+  pio run --target upload --upload-port COM7   (bei mehreren Adaptern)
+
+Vor dem ersten Flash: firmware/include/config.h.example nach
+firmware/include/config.h kopieren, falls noch nicht vorhanden (macht
+scripts/flash.ps1 automatisch).

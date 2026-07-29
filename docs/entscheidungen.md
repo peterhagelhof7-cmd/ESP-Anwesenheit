@@ -1,5 +1,44 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## Flash-Anleitung + Flash-Skript (2026-07-29)
+
+`docs/flash-anleitung.txt` (reine Textform, auf Nutzerwunsch) + `scripts/flash.ps1`
+ergaenzt. Pinbezeichnungen direkt aus dem mitgelieferten Foto
+`WT32-ETH01-back.png` (Rueckseite, Aufdruck "ESP32-ETH01 V1.4") abgelesen,
+nicht aus generischen Online-Pinouts uebernommen - Board hat zwei Spalten
+Pins: links `TXO/RXO/IO0/IO39/IO36/IO15/IO14/IO12/IO35/IO4/IO2/GND`, rechts
+`EN/GND/3V3/EN/CFG/485_EN/RXD/TXD/GND/3V3/GND/5V/LINK`. RXD/TXD (rechts) sind
+dieselben UART0-Signale wie TXO/RXO (links), nur zweimal herausgefuehrt.
+
+**Wichtige Korrektur gegenueber einer ungeprueften generischen Pinout-Notiz**
+(`sensormeter/ESP32-ETH01 v1.4 pinout.txt`, dort steht faelschlich "CFG =
+meist GPIO0"): laut bereits abgeschlossener Recherche im sensormeter-Projekt
+(siehe dortiges `docs/entscheidungen.md` "IO32/IO33-Frage endgueltig geklaert",
+Datenblatt + Foto + 3 Quellen) ist `CFG` in Wirklichkeit GPIO32 und `485_EN`
+GPIO33 - normale GPIOs fuer eine optionale RS485-Zusatzbeschaltung, KEINE
+Boot-Strap-Pins. Der tatsaechliche ESP32-Boot-Modus-Pin ist der separat
+beschriftete `IO0`-Pin (linke Spalte). Flash-Anleitung verweist explizit
+darauf, `CFG`/`485_EN` NICHT mit dem Boot-Modus zu verwechseln.
+
+Flasher-Pins: `GND`, `TXO`↔Adapter-RXD, `RXO`↔Adapter-TXD, zusaetzlich `IO0`
++ `EN` fuer den manuellen Boot-Modus (Adapter ohne DTR/RTS) - Ablauf 1:1 aus
+`sensormeter/docs/flash-bereitschaft.html` uebernommen (dort bereits an
+echter Hardware erprobt, selbes Boardmodell). Spaetere USB-Stromversorgung im
+Normalbetrieb: `5V` + das direkt darueberliegende `GND` (rechte Spalte) -
+Board laeuft mit 5V ODER 3,3V, nie beides gleichzeitig.
+
+`scripts/flash.ps1` ist eine auf ein einzelnes Projekt verschlankte Fassung
+von `sensormeter/repo/scripts/flash.ps1` (kein Mehrprojekt-Auswahlmenue, da
+ESP-Anwesenheit kein Geschwisterprojekt hat) - identische Toolchain-
+Erkennung (funktionaler `--version`-Test statt reiner PATH-Pruefung, wegen
+des Windows-eigenen "python"-Store-Alias-Fallstricks). Verifiziert:
+PowerShell-Parser-Syntaxpruefung sauber, UND tatsaechlich mit `-SkipUpload`
+lokal ausgefuehrt (nicht nur gelesen) - erkennt vorhandene Python/Git/
+PlatformIO-Installation korrekt, findet firmware/platformio.ini relativ zu
+seinem eigenen Pfad, laesst bestehende config.h unangetastet, Build lief
+durch (Flash 80,3%). Der eigentliche Upload-Schritt (`pio run --target
+upload`) ist NICHT verifiziert - kein Board angeschlossen.
+
 ## Projektstart (2026-07-29)
 
 Grundgeruest aufgesetzt und erfolgreich gebaut (`pio run`, Flash 76%, RAM 28%
