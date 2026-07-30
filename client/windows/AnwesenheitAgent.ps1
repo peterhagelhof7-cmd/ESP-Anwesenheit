@@ -37,6 +37,26 @@
 
 Add-Type -AssemblyName System.Windows.Forms
 
+# Erhoeht die Shutdown-Prioritaet dieses Prozesses (Standard: mittig
+# zwischen 0x0 und 0x3FF) - Windows beendet Prozesse mit hoeherer
+# Prioritaet (naeher an 0x3FF) beim Herunterfahren/Abmelden/Neustart
+# tendenziell SPAETER, was dem "logout"-Handler etwas mehr Zeit fuer
+# seinen HTTP-POST verschafft. 0x3FF ist die hoechste fuer normale
+# Anwendungen vorgesehene Stufe (0x400+ ist Systemprozessen vorbehalten).
+# Keine Garantie - bei einem durch Windows Update ausgeloesten Neustart
+# (real beobachtet: kein Logout kam an, siehe docs/entscheidungen.md)
+# kann das Zeitfenster trotzdem zu kurz sein.
+try {
+    Add-Type -Namespace EspAnwesenheit -Name NativeMethods -MemberDefinition @"
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool SetProcessShutdownParameters(uint dwLevel, uint dwFlags);
+"@ -ErrorAction Stop
+    [EspAnwesenheit.NativeMethods]::SetProcessShutdownParameters(0x3FF, 0) | Out-Null
+} catch {
+    # Best effort - falls das aus irgendeinem Grund fehlschlaegt, laeuft der
+    # Agent mit normaler (unveraenderter) Shutdown-Prioritaet weiter.
+}
+
 $script:ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $script:ConfigPath = Join-Path $script:ScriptDir "anwesenheit-client.json"
 
@@ -211,11 +231,30 @@ $script:SessionSwitchHandler = {
     }
 }
 
+# Zusaetzlicher, fruehstmoeglicher Trigger fuer denselben Fall wie
+# SessionLogoff oben (Abmeldung/Herunterfahren/Neustart) - SessionEnding
+# wird ueber WM_QUERYENDSESSION ausgeloest und kann etwas frueher im
+# Shutdown-Ablauf ankommen als der SessionSwitch-Reason SessionLogoff.
+# Beide Trigger koennen fuer denselben echten Vorgang feuern - das ist
+# bewusst in Kauf genommen (ein doppelt gesendetes "logout" ist auf
+# Serverseite folgenlos, der Status wird nur erneut auf "Loginmaske"
+# gesetzt) statt zu riskieren, dass ausgerechnet der schnellere der beiden
+# Wege fehlt. Real beobachtet: selbst ein durch Windows Update
+# ausgeloester Server-Neustart hat mit nur dem SessionLogoff-Trigger kein
+# Logout mehr durchbekommen (siehe docs/entscheidungen.md) - dieser
+# zusaetzliche Trigger + die erhoehte Shutdown-Prioritaet oben sollen die
+# Erfolgschance weiter verbessern, ohne eine Garantie zu sein.
+$script:SessionEndingHandler = {
+    param($senderObj, $e)
+    Send-AnwesenheitEvent -EventType "logout" -TimeoutSec 2 -MaxAttempts 1
+}
+
 # Microsoft.Win32.SystemEvents unterhaelt intern einen eigenen Thread mit
 # versteckter Nachrichtenschleife (genau dafuer entworfen, damit auch
 # Konsolen-Apps/Dienste ohne eigene WinForms-Message-Loop Sitzungsereignisse
 # empfangen koennen) - kein eigenes Application.Run() noetig.
 [Microsoft.Win32.SystemEvents]::add_SessionSwitch($script:SessionSwitchHandler)
+[Microsoft.Win32.SystemEvents]::add_SessionEnding($script:SessionEndingHandler)
 
 Write-AgentLog "Agent gestartet (Server: $script:ServerUrl, Rechner: $script:ComputerIdentifier, Benutzer: $env:USERNAME)"
 
@@ -231,5 +270,6 @@ try {
     }
 } finally {
     [Microsoft.Win32.SystemEvents]::remove_SessionSwitch($script:SessionSwitchHandler)
+    [Microsoft.Win32.SystemEvents]::remove_SessionEnding($script:SessionEndingHandler)
     Write-AgentLog "Agent beendet"
 }

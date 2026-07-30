@@ -1,5 +1,51 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## AnwesenheitAgent.ps1: Logout weiterhin nicht angekommen, auch nach Windows-Update-Neustart (2026-07-30, Folgefix)
+
+Nach dem vorherigen Fix (kurzer Timeout fuer "logout") real gegengeprueft:
+Nutzer hat auf einem echten Windows Server mit RDS-Rolle ("SRV-RDS") getestet
+und den Server ueber Windows Update in den Neustart geschickt - server-
+seitig kam weiterhin KEIN `logout`/`rdp-disconnect` an, nur die beiden
+vorherigen Logins. Ein durch Windows Update ausgeloester Neustart ist ein
+noch haerterer Fall als eine normale interaktive Abmeldung (typischerweise
+weniger Kulanzzeit fuer laufende Benutzerprozesse).
+
+**Zwei weitere Verbesserungen (kein Anspruch auf vollstaendige Loesung):**
+
+1. `SetProcessShutdownParameters(0x3FF, 0)` (P/Invoke auf `kernel32.dll`,
+   `-ErrorAction Stop` mit leerem Catch als Fallback) - erhoeht die
+   Shutdown-Prioritaet des Agent-Prozesses auf die hoechste fuer normale
+   Anwendungen vorgesehene Stufe. Windows beendet Prozesse mit hoeherer
+   Prioritaet beim Herunterfahren tendenziell spaeter.
+2. Zusaetzlicher Trigger auf `Microsoft.Win32.SystemEvents.SessionEnding`
+   (WM_QUERYENDSESSION) NEBEN dem bisherigen `SessionSwitch`/`SessionLogoff`
+   - kann etwas frueher im Shutdown-Ablauf ankommen. Beide Handler senden
+   unabhaengig voneinander "logout" mit kurzem Timeout/ohne Retry; ein
+   doppelt gesendetes Logout ist serverseitig folgenlos (Status wird nur
+   erneut auf "Loginmaske" gesetzt).
+
+Real verifiziert (isoliert, nicht der volle Shutdown-Fall): der
+P/Invoke-Aufruf liefert `True` zurueck, `add_SessionEnding`/
+`remove_SessionEnding` lassen sich ohne Fehler registrieren/entfernen.
+**Nicht verifizierbar ohne einen echten Shutdown-Test**, ob das reale
+Zeitfenster jetzt ausreicht - insbesondere bei einem Windows-Update-
+Neustart bleibt das ungewiss, da der Update-Orchestrator eigene,
+teils deutlich kuerzere Timeouts fuer laufende Benutzerprozesse
+durchsetzen kann, die auch eine erhoehte Shutdown-Prioritaet nicht
+zuverlaessig aushebelt.
+
+**Offene Nebenfrage:** "SRV-RDS" erschien in den Server-Events OHNE die
+erwartete Sitzungskennung in Klammern (z.B. "SRV-RDS (RDP-Tcp#3)"), obwohl
+der Nutzer bestaetigt hat, dass es sich um einen echten Windows Server mit
+RDS-Rolle handelt - laut `Get-ComputerIdentifier` (siehe dort) haette das
+`ProductType != 1` sein und damit die Sitzungskennung anhaengen muessen.
+Ursache noch nicht geklaert (CIM-Abfrage fehlgeschlagen und auf Workstation-
+Verhalten zurueckgefallen? `$env:SESSIONNAME` leer? echter Bug?) - noetig
+waere der genaue Inhalt der lokalen `client.log`
+(`%LOCALAPPDATA%\ESP-Anwesenheit\client.log`), die "Agent gestartet
+(... Rechner: ...)" mit dem tatsaechlich ermittelten Wert protokolliert,
+um das einzugrenzen.
+
 ## AnwesenheitAgent.ps1: Log-Pfad + try/catch-Bug (2026-07-30, Bug real gemeldet, Folgefehler nach der GroupId-Korrektur)
 
 Nach dem GroupId-Fix (siehe unten) lief der Scheduled Task erstmals
