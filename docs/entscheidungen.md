@@ -1,5 +1,35 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## Install-AnwesenheitAgent.ps1: GroupId per SID statt Klartextname (2026-07-30, Bug real gemeldet)
+
+Ein Nutzer meldete beim Ausfuehren von `Install-AnwesenheitAgent.ps1`:
+"Zuordnungen von Kontennamen und Sicherheitskennungen wurden nicht
+durchgefuehrt" (HRESULT 0x80070534) bei `Register-ScheduledTask`.
+
+Ursache: `New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users"` verwendete
+den englischen Klartextnamen der Gruppe. Auf nicht-englischen Windows-
+Installationen ist das lokal anders benannt (auf Deutsch z.B.
+"VORDEFINIERT\Benutzer") - der englische String laesst sich dort nicht
+in eine Sicherheitskennung (SID) aufloesen. Bestaetigt am eigenen System
+(deutsche Windows-Lokalisierung, `de-DE`):
+`[System.Security.Principal.SecurityIdentifier]::new("S-1-5-32-545").Translate([System.Security.Principal.NTAccount])`
+liefert hier `VORDEFINIERT\Benutzer`, nicht `BUILTIN\Users`.
+
+Fix: `-GroupId "S-1-5-32-545"` (die wohlbekannte, sprachunabhaengige SID
+fuer BUILTIN\Users) statt des Klartextnamens - SIDs sind unabhaengig von
+der Systemsprache.
+
+**Testabdeckung/Einschraenkung:** `New-ScheduledTaskPrincipal -GroupId
+"S-1-5-32-545" -RunLevel Limited` wurde real ausgefuehrt und erstellt
+das Principal-Objekt anstandslos (loest lokal zu `GroupId: Benutzer`
+auf) - der eigentliche `Register-ScheduledTask`-Aufruf selbst konnte in
+dieser Sitzung NICHT End-to-End getestet werden (keine Administrator-
+Rechte verfuegbar, Skript braucht `#Requires -RunAsAdministrator`).
+Root-Cause-Diagnose und Fix-Ansatz (SID statt Klartextname) sind ein
+etabliertes, bekanntes Windows-Verhalten, aber die tatsaechliche
+Task-Registrierung mit dem neuen Wert sollte beim naechsten Lauf auf
+einem admin-faehigen System bestaetigt werden.
+
 ## flash.ps1 klont sich jetzt selbst (2026-07-30, Bug real gemeldet)
 
 Ein Nutzer meldete beim Ausfuehren von `flash.ps1` den Fehler

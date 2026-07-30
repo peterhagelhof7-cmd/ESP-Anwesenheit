@@ -53,11 +53,19 @@ $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
     -MultipleInstances IgnoreNew
-# GroupId "BUILTIN\Users" + RunLevel Limited: Standardmuster fuer "bei
-# Anmeldung fuer alle Benutzer, jeweils in deren eigener Sitzung" - jeder
-# Benutzer bekommt eine eigene Instanz mit eigenen Rechten, kein Admin-Kontext
-# noetig (der Agent liest/schreibt nur sein eigenes Log + sendet HTTP).
-$principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Users" -RunLevel Limited
+# GroupId ueber die wohlbekannte SID (S-1-5-32-545 = BUILTIN\Users) statt
+# des literalen Namens "BUILTIN\Users" - auf nicht-englischen Windows-
+# Installationen (z.B. deutsch: "VORDEFINIERT\Benutzer") kann Register-
+# ScheduledTask den englischen Namen nicht aufloesen ("Zuordnungen von
+# Kontennamen und Sicherheitskennungen wurden nicht durchgefuehrt",
+# HRESULT 0x80070534 - real so aufgetreten). Die SID selbst ist
+# sprachunabhaengig und funktioniert auf jeder Windows-Lokalisierung.
+#
+# RunLevel Limited: Standardmuster fuer "bei Anmeldung fuer alle Benutzer,
+# jeweils in deren eigener Sitzung" - jeder Benutzer bekommt eine eigene
+# Instanz mit eigenen Rechten, kein Admin-Kontext noetig (der Agent
+# liest/schreibt nur sein eigenes Log + sendet HTTP).
+$principal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
 
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
     -Settings $settings -Principal $principal `
