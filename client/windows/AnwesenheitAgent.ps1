@@ -28,8 +28,8 @@
 
     Auf einem Windows-Server mit RDS-Rolle (mehrere gleichzeitige Sitzungen
     auf demselben Rechner moeglich) wird der Rechnername im Payload um die
-    Sitzungskennung ergaenzt (z.B. "RDSHOST01 (RDP-Tcp#5)"), damit jede
-    Sitzung eine eigene Zeile in der Weboberflaeche bekommt statt sich
+    numerische Sitzungs-ID ergaenzt (z.B. "RDSHOST01 (Sitzung 3)"), damit
+    jede Sitzung eine eigene Zeile in der Weboberflaeche bekommt statt sich
     gegenseitig zu ueberschreiben. Auf normalem Client-Windows (Win10/11,
     immer nur eine Sitzung gleichzeitig) bleibt der reine Rechnername
     unveraendert - siehe Get-ComputerIdentifier.
@@ -127,8 +127,21 @@ function Get-CurrentLogonType {
 # Controller, 3=Server) statt z.B. ueber "laeuft gerade mehr als eine
 # Sitzung" - liefert ein stabiles, sofort beim Start feststehendes Ergebnis
 # ohne wiederholte Sitzungsabfrage, und braucht keine erhoehten Rechte.
-# $env:SESSIONNAME liefert je Sitzung einen eindeutigen Wert ("Console" bzw.
-# "RDP-Tcp#<n>").
+#
+# KORREKTUR (2026-07-30, real auf einem echten RDS-Host bestaetigt):
+# urspruenglich wurde $env:SESSIONNAME als Sitzungskennung angehaengt
+# ("Console" bzw. "RDP-Tcp#<n>") - real beobachtet blieb diese aber LEER,
+# wenn der Agent vom Scheduled-Task-Dienst gestartet wird (der Dienst baut
+# sein eigenes Umgebungsblock aus dem gespeicherten Benutzerprofil auf und
+# uebernimmt NICHT die von winlogon/explorer zur Laufzeit dynamisch
+# gesetzten Sitzungsvariablen einer interaktiven Anmeldung) - die
+# Sitzungskennung fiel dadurch komplett weg, obwohl ProductType korrekt
+# als Server erkannt wurde. Stattdessen jetzt die numerische Sitzungs-ID
+# direkt vom Betriebssystem abgefragt (.NET
+# Process.GetCurrentProcess().SessionId) - eine echte, vom Betriebssystem
+# geloest zurueckgelieferte Prozesseigenschaft, unabhaengig davon, wie/von
+# wem der Prozess gestartet wurde. Weniger "huebsch" als "RDP-Tcp#3" (nur
+# eine Zahl), dafuer zuverlaessig immer vorhanden.
 function Get-ComputerIdentifier {
     try {
         $productType = (Get-CimInstance -ClassName Win32_OperatingSystem -Property ProductType -ErrorAction Stop).ProductType
@@ -140,10 +153,8 @@ function Get-ComputerIdentifier {
     if ($productType -eq 1) {
         return $env:COMPUTERNAME
     }
-    if ([string]::IsNullOrEmpty($env:SESSIONNAME)) {
-        return $env:COMPUTERNAME
-    }
-    return "$env:COMPUTERNAME ($env:SESSIONNAME)"
+    $sessionId = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
+    return "$env:COMPUTERNAME (Sitzung $sessionId)"
 }
 # Einmal beim Start ermittelt (aendert sich waehrend der Laufzeit einer
 # Sitzung nicht) statt bei jedem Send-AnwesenheitEvent neu abgefragt.

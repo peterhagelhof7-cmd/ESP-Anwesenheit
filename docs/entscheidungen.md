@@ -1,5 +1,38 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## RDS-Sitzungskennung: $env:SESSIONNAME leer bei Scheduled-Task-Start (2026-07-30, Nebenfrage geklaert)
+
+Die offene Nebenfrage aus dem vorherigen Eintrag ist geklaert: Nutzer hat
+die lokale `client.log` von "SRV-RDS" geschickt - `Get-ComputerIdentifier`
+lieferte dort durchgehend (3x, ueber 26 Minuten verteilt, kein einmaliger
+Timing-Zufall) nur den reinen Rechnernamen "SRV-RDS" ohne Sitzungskennung.
+
+**Root Cause:** `$env:SESSIONNAME` (bisherige Quelle der Sitzungskennung,
+"Console"/"RDP-Tcp#<n>") ist bei einem vom Scheduled-Task-Dienst
+gestarteten Prozess NICHT zuverlaessig gesetzt - der Dienst baut sein
+eigenes Umgebungsblock aus dem gespeicherten Benutzerprofil auf und
+uebernimmt dabei nicht die von winlogon/explorer nur zur Laufzeit einer
+interaktiven Anmeldung dynamisch gesetzten Sitzungsvariablen.
+`Win32_OperatingSystem.ProductType` (die andere Hälfte der Erkennung) war
+dabei nachweislich korrekt (der Server-Zweig wurde ja betreten, sonst
+waere ueberhaupt keine Sitzungskennung versucht worden) - das Problem lag
+ausschliesslich an der Umgebungsvariable.
+
+**Fix:** `$env:SESSIONNAME` ersetzt durch
+`[System.Diagnostics.Process]::GetCurrentProcess().SessionId` - eine
+direkt vom Betriebssystem gelieferte Prozesseigenschaft, unabhaengig vom
+Startkontext (Scheduled Task, interaktive Shell, o.ae.) immer korrekt
+gesetzt. Format geaendert von "RDSHOST01 (RDP-Tcp#5)" auf "RDSHOST01
+(Sitzung 5)" - weniger sprechend (nur eine Zahl statt des WTS-
+Sitzungsnamens), dafuer zuverlaessig.
+
+Real verifiziert: isolierter Funktionstest mit simuliertem
+`ProductType=3` liefert jetzt korrekt "<COMPUTERNAME> (Sitzung
+<SessionId>)"; `ProductType=1` weiterhin unveraendert nur
+`<COMPUTERNAME>`. Der eigentliche Beweis (dass es auf einem echten
+Scheduled-Task-Start eines RDS-Hosts jetzt tatsaechlich greift) steht
+noch aus - der naechste reale Test auf "SRV-RDS" sollte das zeigen.
+
 ## AnwesenheitAgent.ps1: Logout weiterhin nicht angekommen, auch nach Windows-Update-Neustart (2026-07-30, Folgefix)
 
 Nach dem vorherigen Fix (kurzer Timeout fuer "logout") real gegengeprueft:
