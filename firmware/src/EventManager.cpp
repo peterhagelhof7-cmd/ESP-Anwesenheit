@@ -1,6 +1,7 @@
 #include "EventManager.h"
 
 #include <algorithm>
+#include "TimeUtils.h"
 
 namespace {
 // Bildet die 7 in der Projektbeschreibung aufgefuehrten Ereignistypen auf den
@@ -169,4 +170,23 @@ void EventManager::clearAll() {
   _ringCount = 0;
   _ringNextIndex = 0;
   xSemaphoreGive(_mutex);
+}
+
+size_t EventManager::pruneStaleStatuses(unsigned long maxAgeSeconds) {
+  if (!isTimeSynced()) return 0;
+  time_t now = time(nullptr);
+  size_t removedCount = 0;
+
+  xSemaphoreTake(_mutex, portMAX_DELAY);
+  for (auto it = _statuses.begin(); it != _statuses.end();) {
+    if ((unsigned long)(now - it->lastUpdate) > maxAgeSeconds) {
+      it = _statuses.erase(it);
+      removedCount++;
+    } else {
+      ++it;
+    }
+  }
+  xSemaphoreGive(_mutex);
+
+  return removedCount;
 }

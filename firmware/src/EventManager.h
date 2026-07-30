@@ -74,6 +74,16 @@ class EventManager {
   // persistente logins.csv wird separat von HistoryManager geloescht.
   void clearAll();
 
+  // Entfernt Status-Zeilen, deren lastUpdate laenger als maxAgeSeconds
+  // zurueckliegt - unabhaengig vom state (auch "Lokal"/"RDP"/"Gesperrt",
+  // nicht nur "Loginmaske"): ein Rechner, der sich einfach nie wieder
+  // meldet, soll nicht dauerhaft in der Uebersicht haengen bleiben. Ohne
+  // synchronisierte Uhr (isTimeSynced()) wird NICHT geprueft - sonst
+  // koennte eine falsch gehende RTC kurz nach dem Boot versehentlich
+  // alles als "uralt" werten und loeschen. Liefert die Anzahl entfernter
+  // Zeilen (fuer eine Logmeldung im Aufrufer).
+  size_t pruneStaleStatuses(unsigned long maxAgeSeconds);
+
  private:
   SemaphoreHandle_t _mutex = nullptr;
 

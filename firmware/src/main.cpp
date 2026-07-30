@@ -285,6 +285,25 @@ void loop() {
     mdnsStarted = true;
   }
 
+  // Alle 5 Minuten pruefen, ob veraltete Status-Zeilen entfernt werden
+  // sollen (Einstellungsseite "staleEntryHours", Default 2h, 0 = aus).
+  // 5 Minuten statt jeder Schleife: die Pruefung selbst ist zwar billig
+  // (kleiner Vector), aber ein 5-Minuten-Takt reicht fuer eine
+  // Stunden-Schwelle voellig und spart unnoetige Mutex-Locks.
+  static unsigned long lastStalePruneMillis = 0;
+  const unsigned long STALE_PRUNE_INTERVAL_MS = 5UL * 60UL * 1000UL;
+  if (millis() - lastStalePruneMillis >= STALE_PRUNE_INTERVAL_MS) {
+    lastStalePruneMillis = millis();
+    uint16_t staleHours = configManager.getConfig().staleEntryHours;
+    if (staleHours > 0) {
+      size_t removed = eventManager.pruneStaleStatuses((unsigned long)staleHours * 3600UL);
+      if (removed > 0) {
+        dataManager.pushLogEntry("Status: " + String(removed) + " veraltete(r) Eintrag/Eintraege entfernt (>" +
+                                  String(staleHours) + "h inaktiv)");
+      }
+    }
+  }
+
   esp_task_wdt_reset();
   delay(50);
 }

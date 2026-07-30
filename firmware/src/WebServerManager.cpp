@@ -193,6 +193,14 @@ String WebServerManager::buildSettingsPageBody() const {
   html += "<p class=\"hint\">Read-only SNMP v1/v2c auf Port 161, siehe Zabbix-Template in docs/. "
           "Wirkt erst nach einem Neustart (Schaltflaeche unten).</p></div>";
 
+  html += "<div class=\"block\"><h2>Anzeige</h2>";
+  html += "<form method=\"POST\" action=\"/api/config\">";
+  html += "<label>Veraltete Eintraege nach X Stunden entfernen (0 = nie)<input type=\"number\" min=\"0\" "
+          "max=\"8760\" name=\"staleEntryHours\" value=\"" + String(cfg.staleEntryHours) + "\"></label>";
+  html += "<input type=\"submit\" value=\"Speichern\"></form>";
+  html += "<p class=\"hint\">Betrifft alle Status-Zeilen (auch Lokal/RDP/Gesperrt), nicht nur die Loginmaske - "
+          "ein Rechner, der sich nie wieder meldet, bleibt sonst dauerhaft in der Uebersicht stehen.</p></div>";
+
   html += "<div class=\"block\"><h2>LAN</h2>";
   html += "<form method=\"POST\" action=\"/api/network/apply\">";
   html += "<input type=\"hidden\" name=\"iface\" value=\"lan\">";
@@ -424,6 +432,10 @@ void WebServerManager::handleApiConfigPost(AsyncWebServerRequest* request) {
     String community = request->getParam("snmpCommunity", true)->value();
     if (community.length() > 0) cfg.snmpCommunity = community;
   }
+  if (request->hasParam("staleEntryHours", true)) {
+    long hours = request->getParam("staleEntryHours", true)->value().toInt();
+    if (hours >= 0 && hours <= 8760) cfg.staleEntryHours = (uint16_t)hours;
+  }
   _config.setConfig(cfg);
   request->redirect("/settings");
 }
@@ -573,7 +585,14 @@ void WebServerManager::handleOtaUpload(AsyncWebServerRequest* request, String fi
   if (!checkAuth(request)) return;
   if (index == 0) {
     _ota.setAllowDowngrade(request->hasParam("otaForceDowngrade", true));
-    _otaInProgress = _ota.beginLocalUpdate(UPDATE_SIZE_UNKNOWN);
+    // request->contentLength() statt UPDATE_SIZE_UNKNOWN: ohne bekannte
+    // Groesse legt Update.begin() die GESAMTE OTA-Partitionsgroesse als zu
+    // loeschenden Bereich zugrunde statt nur der tatsaechlich benoetigten -
+    // ein unnoetig langer blockierender Flash-Loeschvorgang gleich zu
+    // Beginn des Uploads, der bei sensormeter-wlan (identisches Muster)
+    // real einen WLAN-Verbindungsabbruch mitten im Upload ausgeloest hat.
+    // Siehe docs/entscheidungen.md.
+    _otaInProgress = _ota.beginLocalUpdate(request->contentLength());
     _otaSuccess = false;
   }
   if (_otaInProgress) {

@@ -32,6 +32,7 @@ bool ConfigManager::load() {
   cfg.systemName = doc["systemName"] | cfg.systemName;
   cfg.settingsPassword = doc["settingsPassword"] | cfg.settingsPassword;
   cfg.snmpCommunity = doc["snmpCommunity"] | cfg.snmpCommunity;
+  cfg.staleEntryHours = doc["staleEntryHours"] | cfg.staleEntryHours;
 
   JsonObject lan = doc["lan"];
   if (lan) {
@@ -63,6 +64,7 @@ bool ConfigManager::save() {
   doc["systemName"] = _config.systemName;
   doc["settingsPassword"] = _config.settingsPassword;
   doc["snmpCommunity"] = _config.snmpCommunity;
+  doc["staleEntryHours"] = _config.staleEntryHours;
 
   JsonObject lan = doc["lan"].to<JsonObject>();
   lan["dhcp"] = _config.lanDhcp;

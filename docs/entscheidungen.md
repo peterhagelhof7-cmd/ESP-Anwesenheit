@@ -1,5 +1,45 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## Aufraeumen veralteter Status-Zeilen + eigener OTA-Fix (2026-07-30, v0.2.0)
+
+Auf Nutzerwunsch: nach dem RDS-Sitzungs-Test faellt auf, dass jede neue
+Sitzungs-ID (siehe oben) eine dauerhafte eigene `/status`-Zeile bekommt,
+auch nach dem Logout ("Loginmaske") - bei haeufigen Reconnects auf einem
+stark genutzten RDS-Host wuerden sich mit der Zeit viele tote Zeilen
+ansammeln.
+
+**Neu:** `DeviceConfig.staleEntryHours` (Default 2, 0 = deaktiviert,
+Einstellungsseite "Anzeige"). `EventManager::pruneStaleStatuses()`
+entfernt Status-Zeilen, deren `lastUpdate` laenger als die konfigurierte
+Stundenzahl zurueckliegt - bewusst UNABHAENGIG vom `state` (auch
+"Lokal"/"RDP"/"Gesperrt", nicht nur "Loginmaske"): ein Rechner, der sich
+einfach nie wieder meldet (aus, Agent deinstalliert, dauerhafter
+Netzwerkausfall), soll ebenso verschwinden, nicht nur ausdrueckliche
+Abmeldungen. Wie bei `HistoryManager::pruneOldRows()` wird ohne
+synchronisierte Uhr (`isTimeSynced()`) NICHT geprueft - sonst koennte
+eine falsch gehende RTC kurz nach dem Boot versehentlich alles loeschen.
+Aufruf alle 5 Minuten aus `main.cpp::loop()` (kein neuer Manager noetig,
+analog zum bestehenden mDNS-Start-Muster) statt bei jedem Loop-Durchlauf -
+die Pruefung selbst ist zwar billig, aber unnoetig bei einer
+Stunden-Schwelle.
+
+**Zusaetzlich mitgezogen:** derselbe `UPDATE_SIZE_UNKNOWN`-OTA-Bug wie bei
+sensormeter-wlan (siehe dortiges `docs/entscheidungen.md`) steckte auch
+hier im OTA-Upload-Handler - identischer Fix (`r->contentLength()` statt
+`UPDATE_SIZE_UNKNOWN`), noch vor dem geplanten Live-OTA-Test dieses
+Updates behoben, um die Erfolgschance des Uploads selbst zu erhoehen.
+
+Version auf 0.2.0 angehoben (neues Feature, siehe `config.h`/`config.h.example`).
+`pio run` erfolgreich (Flash 80,5%, RAM 28,9%), Version im Binary per
+`SM-FW-ID:ESP-ANWESENHEIT:0.2.0:SM-FW-END` bestaetigt.
+
+**Nicht real ueber die volle Laufzeit verifiziert:** das eigentliche
+Entfernen einer veralteten Zeile nach Ablauf der konfigurierten Stunden
+wurde nicht live beobachtet (bräuchte mehrere Stunden Wartezeit) - Logik
+per Code-Review sorgfaeltig geprueft, Einstellungsfeld/Speichern-Rundlauf
+sowie der OTA-Upload selbst wurden dagegen real auf dem laufenden Geraet
+getestet (siehe unten).
+
 ## RDS-Sitzungskennung: $env:SESSIONNAME leer bei Scheduled-Task-Start (2026-07-30, Nebenfrage geklaert)
 
 Die offene Nebenfrage aus dem vorherigen Eintrag ist geklaert: Nutzer hat
