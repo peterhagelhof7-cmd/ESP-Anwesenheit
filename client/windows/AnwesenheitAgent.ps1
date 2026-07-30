@@ -16,6 +16,16 @@
     (wird von Install-AnwesenheitAgent.ps1 angelegt) - Default, falls die
     Datei fehlt: http://esp-anwesenheit.local/event
 
+    Log-Datei liegt bewusst NICHT neben dem Skript (typischerweise
+    C:\Program Files\ESP-Anwesenheit\, siehe Install-AnwesenheitAgent.ps1),
+    sondern unter %LOCALAPPDATA%\ESP-Anwesenheit\ - der Agent laeuft mit
+    Absicht als eingeschraenkter Benutzer ohne Admin-Rechte (RunLevel
+    Limited, siehe Installer), und Program Files ist fuer normale Benutzer
+    nur lesbar, nicht beschreibbar. %LOCALAPPDATA% ist fuer den jeweils
+    angemeldeten Benutzer immer beschreibbar, ganz ohne Sonderrechte -
+    als Nebeneffekt bekommt auf einem RDS-Host (siehe Get-ComputerIdentifier)
+    jeder Benutzer automatisch sein eigenes Log.
+
     Auf einem Windows-Server mit RDS-Rolle (mehrere gleichzeitige Sitzungen
     auf demselben Rechner moeglich) wird der Rechnername im Payload um die
     Sitzungskennung ergaenzt (z.B. "RDSHOST01 (RDP-Tcp#5)"), damit jede
@@ -29,7 +39,13 @@ Add-Type -AssemblyName System.Windows.Forms
 
 $script:ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $script:ConfigPath = Join-Path $script:ScriptDir "anwesenheit-client.json"
-$script:LogPath = Join-Path $script:ScriptDir "client.log"
+
+# %LOCALAPPDATA% statt neben dem Skript (das liegt typischerweise unter
+# C:\Program Files\, siehe .DESCRIPTION oben) - der Agent laeuft absichtlich
+# ohne Admin-Rechte und kann dort nicht schreiben.
+$script:LogDir = Join-Path $env:LOCALAPPDATA "ESP-Anwesenheit"
+New-Item -ItemType Directory -Path $script:LogDir -Force -ErrorAction SilentlyContinue | Out-Null
+$script:LogPath = Join-Path $script:LogDir "client.log"
 $script:MaxLogBytes = 1MB
 
 function Get-ServerUrl {
@@ -56,7 +72,14 @@ function Write-AgentLog {
             Remove-Item $script:LogPath -Force -ErrorAction SilentlyContinue
         }
         $line = "{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $Message
-        Add-Content -Path $script:LogPath -Value $line -Encoding UTF8
+        # -ErrorAction Stop: Add-Content wirft standardmaessig einen NICHT
+        # abbrechenden Fehler - ohne dieses Flag (und ohne globales
+        # $ErrorActionPreference = "Stop") wuerde das umgebende try/catch
+        # ihn gar nicht erst abfangen und der Fehler liefe stattdessen in
+        # den Error-Stream durch (sichtbar als rotes PowerShell-Fenster) -
+        # genau so real aufgetreten, bevor der Log-Pfad ausserdem auf
+        # %LOCALAPPDATA% umgestellt wurde (siehe oben).
+        Add-Content -Path $script:LogPath -Value $line -Encoding UTF8 -ErrorAction Stop
     } catch {
         # Logging darf den Agenten nie zum Absturz bringen (z.B. Verzeichnis
         # schreibgeschuetzt) - Fehler hier wird bewusst verschluckt.

@@ -1,5 +1,46 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## AnwesenheitAgent.ps1: Log-Pfad + try/catch-Bug (2026-07-30, Bug real gemeldet, Folgefehler nach der GroupId-Korrektur)
+
+Nach dem GroupId-Fix (siehe unten) lief der Scheduled Task erstmals
+wirklich an - dabei zeigte sich ein sichtbares PowerShell-Fenster mit:
+`Add-Content : Der Zugriff auf den Pfad "C:\Program
+Files\ESP-Anwesenheit\client.log" wurde verweigert.`
+
+**Zwei Bugs, beide bestaetigt:**
+
+1. **Log-Pfad in Program Files ist grundsaetzlich falsch.** Der Agent
+   laeuft absichtlich mit `RunLevel Limited` (kein Admin-Kontext, siehe
+   Installer) - `C:\Program Files\...` ist fuer normale Benutzer aber nur
+   lesbar, nicht beschreibbar. Der Log-Schreibversuch musste dort
+   zwangslaeufig fehlschlagen, unabhaengig von jeder Fehlerbehandlung.
+2. **`try/catch` um `Add-Content` griff gar nicht.** `Add-Content` wirft
+   standardmaessig einen NICHT abbrechenden Fehler; ohne
+   `-ErrorAction Stop` (und ohne globales
+   `$ErrorActionPreference = "Stop"`, das dieses Skript anders als die
+   beiden anderen Client-Skripte nie gesetzt hatte) faengt ein normales
+   `try/catch` diesen Fehlertyp NICHT ab - er laeuft stattdessen in den
+   Error-Stream durch, sichtbar als rotes PowerShell-Fenster. Real
+   reproduziert: derselbe `Add-Content`-Aufruf auf einen unerreichbaren
+   Pfad wirft mit `-ErrorAction Stop` einen sauber fangbaren Fehler, ohne
+   fluescht er unabgefangen durch.
+
+**Fix:**
+- Log-Datei liegt jetzt unter `%LOCALAPPDATA%\ESP-Anwesenheit\client.log`
+  statt neben dem Skript - fuer den jeweils angemeldeten Benutzer immer
+  beschreibbar, keine Sonderrechte noetig. Nebeneffekt: auf einem
+  RDS-Host (siehe `Get-ComputerIdentifier`) bekommt automatisch jeder
+  Benutzer sein eigenes Log statt sich eins zu teilen/zu ueberschreiben.
+- `Add-Content ... -ErrorAction Stop` ergaenzt, damit das umgebende
+  `try/catch` tatsaechlich greift (bewusstes Verschlucken von
+  Log-Schreibfehlern war schon immer die Absicht, hat nur nie funktioniert).
+
+**Real verifiziert (nicht nur gelesen):** derselbe `Add-Content`-Aufruf
+ohne `-ErrorAction Stop` gegen einen unerreichbaren Pfad reproduziert das
+gemeldete Symptom 1:1 (Fehler sichtbar, `catch` greift nicht); mit
+`-ErrorAction Stop` wird er sauber gefangen; ein Schreibversuch nach
+`%LOCALAPPDATA%\ESP-Anwesenheit\` gelingt ohne Adminrechte anstandslos.
+
 ## Install-AnwesenheitAgent.ps1: GroupId per SID statt Klartextname (2026-07-30, Bug real gemeldet)
 
 Ein Nutzer meldete beim Ausfuehren von `Install-AnwesenheitAgent.ps1`:
