@@ -36,9 +36,22 @@ Version auf 0.2.0 angehoben (neues Feature, siehe `config.h`/`config.h.example`)
 **Nicht real ueber die volle Laufzeit verifiziert:** das eigentliche
 Entfernen einer veralteten Zeile nach Ablauf der konfigurierten Stunden
 wurde nicht live beobachtet (bräuchte mehrere Stunden Wartezeit) - Logik
-per Code-Review sorgfaeltig geprueft, Einstellungsfeld/Speichern-Rundlauf
-sowie der OTA-Upload selbst wurden dagegen real auf dem laufenden Geraet
-getestet (siehe unten).
+per Code-Review sorgfaeltig geprueft.
+
+**OTA-Live-Test erfolgreich (2026-07-30):** Update per `POST
+/api/ota/upload` auf das laufende Geraet (0.1.0 -> 0.2.0) durchgefuehrt.
+curl selbst lief nach 60s in einen Timeout (`CURLE_OPERATION_TIMEDOUT`,
+keine Antwort erhalten) - das Update war aber tatsaechlich erfolgreich:
+das Geraet antwortete danach mit `Firmware: 0.2.0`, Netzwerk-/
+Konfigurationsdaten (WLAN-Zugangsdaten, IP) blieben erhalten, das neue
+Einstellungsfeld "Anzeige" (staleEntryHours, Default 2) ist auf der
+echten Settings-Seite sichtbar. Der zuvor gefixte `UPDATE_SIZE_UNKNOWN`-
+Bug hat den Upload also tatsaechlich durchgehen lassen (anders als bei
+sensormeter-wlan, wo derselbe Fix allein nicht ausreichte) - ob das an
+staerkerem Signal, Ethernet-Anteil (LAN+WLAN dual-homed) oder Zufall
+liegt, ist nicht geklaert. `/status` ist nach dem Neustart leer/neu -
+erwartetes Verhalten (RAM-only, siehe Projektbeschreibung), kein
+Datenverlust-Bug.
 
 ## RDS-Sitzungskennung: $env:SESSIONNAME leer bei Scheduled-Task-Start (2026-07-30, Nebenfrage geklaert)
 
