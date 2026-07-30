@@ -135,10 +135,23 @@ $script:ComputerIdentifier = Get-ComputerIdentifier
 # Status ohnehin nur im RAM, ein verlorenes Ereignis faellt beim naechsten
 # Wechsel (spaetestens beim naechsten Login) automatisch wieder in einen
 # konsistenten Zustand.
+#
+# -TimeoutSec/-MaxAttempts sind bewusst ueberschreibbar: bei "logout" killt
+# Windows den Scheduled-Task-Prozess waehrend Abmeldung/Herunterfahren nach
+# einer kurzen Gnadenfrist (typischerweise nur wenige Sekunden) - der
+# Standard-Ablauf (5s Timeout + 2s Pause + zweiter 5s-Versuch, bis zu ~12s)
+# passt in dieses Fenster oft nicht mehr hinein, wodurch das Logout-Ereignis
+# nie ankommt (real beobachtet: ausschliesslich login-Ereignisse in der
+# Historie, nie ein logout davor). Der SessionLogoff-Handler unten ruft
+# deshalb mit kurzem Timeout und ohne Retry auf - erhoeht die Chance, noch
+# rechtzeitig fertig zu werden, auf Kosten der Netzwerk-Resilienz genau fuer
+# diesen einen, ohnehin zeitkritischen Fall.
 function Send-AnwesenheitEvent {
     param(
         [Parameter(Mandatory)][string]$EventType,
-        [string]$LogonType = ""
+        [string]$LogonType = "",
+        [int]$TimeoutSec = 5,
+        [int]$MaxAttempts = 2
     )
     $payload = @{
         computer  = $script:ComputerIdentifier
@@ -148,14 +161,14 @@ function Send-AnwesenheitEvent {
         timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
     } | ConvertTo-Json -Compress
 
-    for ($attempt = 1; $attempt -le 2; $attempt++) {
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
             Invoke-RestMethod -Uri $script:ServerUrl -Method Post -Body $payload `
-                -ContentType "application/json" -TimeoutSec 5 | Out-Null
+                -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
             Write-AgentLog "Gesendet: $EventType/$LogonType"
             return
         } catch {
-            if ($attempt -ge 2) {
+            if ($attempt -ge $MaxAttempts) {
                 Write-AgentLog "FEHLER beim Senden von $EventType : $($_.Exception.Message)"
             } else {
                 Start-Sleep -Seconds 2
@@ -177,7 +190,8 @@ $script:SessionSwitchHandler = {
             Send-AnwesenheitEvent -EventType "login" -LogonType (Get-CurrentLogonType)
         }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLogoff) {
-            Send-AnwesenheitEvent -EventType "logout"
+            # Kurzer Timeout, kein Retry - siehe Kommentar an Send-AnwesenheitEvent.
+            Send-AnwesenheitEvent -EventType "logout" -TimeoutSec 2 -MaxAttempts 1
         }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLock) {
             Send-AnwesenheitEvent -EventType "lock"

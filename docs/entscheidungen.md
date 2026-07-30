@@ -332,12 +332,29 @@ braucht Admin. Serveradresse liegt in einer separaten
 das Verteilen auf mehrere PCs (`Install-AnwesenheitAgent.ps1 -ServerUrl ...`
 kopiert Skript + schreibt die Config in einem Schritt).
 
-**Bekannte Einschraenkung**: Bei Abmeldung kann der Scheduled Task beendet
-werden, bevor der "logout"-HTTP-POST (bis zu 5s Timeout + 1 Retry)
-abgeschlossen ist - ein gelegentlich fehlendes Logout-Ereignis ist deshalb
-moeglich. Unkritisch, da die Web-UI Eintraege ab 15 Minuten Inaktivitaet
-ohnehin abblendet (siehe oben) und der naechste Login den Status wieder
-korrigiert.
+**Bekannte Einschraenkung, real bestaetigt und teilweise entschaerft
+(2026-07-30):** Bei Abmeldung/Herunterfahren kann Windows den Scheduled-
+Task-Prozess beenden, bevor der "logout"-HTTP-POST abgeschlossen ist. Real
+beobachtet auf einem echten Geraet: `/events` zeigte ausschliesslich
+`login`-Ereignisse (4 Stueck ueber ~1h), nie ein `logout`/`lock`/`unlock`
+davor - der urspruengliche Ablauf (5s Timeout + 2s Pause + zweiter 5s-
+Versuch, bis zu ~12s) passte damit erkennbar zu langsam in das kurze
+Zeitfenster, das Windows vor dem Prozess-Kill gewaehrt. Fix:
+`Send-AnwesenheitEvent` bekam neue optionale `-TimeoutSec`/-`MaxAttempts`-
+Parameter; der `SessionLogoff`-Handler ruft jetzt mit `-TimeoutSec 2
+-MaxAttempts 1` auf (kein Retry) - erhoeht die Chance, das Zeitfenster
+noch zu treffen, auf Kosten der Netzwerk-Resilienz genau fuer diesen einen
+zeitkritischen Fall. Alle anderen Ereignisse (login/lock/unlock/RDP)
+behalten die bisherigen 5s/2-Versuche.
+
+Real getestet: derselbe verkuerzte Aufruf (2s Timeout, kein Retry) gegen
+das echte Geraet beantwortet in ~155ms - das eigentliche Zeitproblem liegt
+also nicht an der Serverantwortzeit, sondern ausschliesslich am
+Windows-seitigen Abmelde-/Herunterfahren-Zeitfenster. **Nicht garantiert
+vollstaendig geloest** - ob Windows in JEDEM Fall genuegend Zeit fuer auch
+nur 2 Sekunden gewaehrt, haengt von Systemkonfiguration/-last ab; weiterhin
+unkritisch, da die Web-UI Eintraege ab 15 Minuten Inaktivitaet abblendet
+und der naechste Login den Status ohnehin korrigiert.
 
 ## RDS-Mehrfachsitzungs-Unterstuetzung (2026-07-29)
 
