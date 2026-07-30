@@ -1,5 +1,30 @@
 # Entscheidungen - ESP-Anwesenheit
 
+## flash.ps1 klont sich jetzt selbst (2026-07-30, Bug real gemeldet)
+
+Ein Nutzer meldete beim Ausfuehren von `flash.ps1` den Fehler
+"firmware/platformio.ini nicht gefunden unter C:\Users\<name>\firmware" -
+Ursache: nur die einzelne `flash.ps1`-Datei wurde heruntergeladen (z.B. per
+Rechtsklick "Speichern unter" direkt von GitHub), nicht der gesamte
+Checkout. Das Skript ging bis dahin unbedingt davon aus, in `scripts/`
+innerhalb eines vollstaendigen `git clone` zu liegen (`$RepoRoot =
+Split-Path -Parent $PSScriptRoot`) und brach sonst nur mit einer
+Fehlermeldung ab, ohne selbst etwas dagegen zu tun.
+
+Fix (v1.1.0): findet das Skript keinen Checkout eine Ebene ueber sich
+(`firmware/platformio.ini` fehlt), klont es das Repository selbst nach
+`-RepoPath` (Default: Ordner "ESP-Anwesenheit" neben dem Skript) - Muster
+1:1 aus `sensormeter/repo/scripts/flash.ps1` uebernommen (dort seit der
+allerersten Fassung so geloest, siehe dortiges docs/entscheidungen.md).
+Liegt bereits ein Checkout vor, wird bei sauberem Arbeitsstand automatisch
+`git pull` versucht (uebersprungen bei lokalen Aenderungen, um nichts zu
+ueberschreiben) - ebenfalls aus dem sensormeter-Muster uebernommen.
+
+Real verifiziert: `flash.ps1` in ein leeres Verzeichnis kopiert (nur diese
+eine Datei, exakt das gemeldete Szenario nachgestellt) und mit
+`-SkipUpload` ausgefuehrt - klont das Repo automatisch, legt config.h an,
+Build erfolgreich (Flash 80,3%, RAM 28,9%).
+
 ## Flash-Anleitung + Flash-Skript (2026-07-29)
 
 `docs/flash-anleitung.txt` (reine Textform, auf Nutzerwunsch) + `scripts/flash.ps1`

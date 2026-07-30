@@ -6,6 +6,13 @@
 .DESCRIPTION
   - Installiert Python + PlatformIO, falls nicht vorhanden (ueber winget/pip)
   - Installiert Git, falls nicht vorhanden (ueber winget)
+  - Ermittelt den Projekt-Checkout: liegt dieses Skript bereits in scripts/
+    innerhalb eines vollstaendigen ESP-Anwesenheit-Checkouts (Normalfall bei
+    "git clone"), wird dieser verwendet. Wurde stattdessen nur diese eine
+    Datei heruntergeladen (z.B. per Rechtsklick "Speichern unter" auf
+    GitHub, ohne den Rest des Repos), fehlt firmware/platformio.ini dort -
+    in dem Fall klont das Skript das komplette Repository selbst nach
+    -RepoPath (Default: ein Ordner "ESP-Anwesenheit" neben dem Skript).
   - Legt firmware/include/config.h aus der Vorlage an, falls sie noch fehlt
     (wird nie ueberschrieben, falls bereits vorhanden)
   - Baut die Firmware (pio run) zur Kontrolle
@@ -20,6 +27,11 @@
   Board-Verkabelung/Boot-Modus siehe docs/flash-anleitung.txt - dieses
   Skript kann den manuellen Boot-Modus-Handgriff (IO0/EN) nicht
   automatisieren, falls der verwendete USB-Adapter kein DTR/RTS hat.
+
+.PARAMETER RepoPath
+  Zielordner fuer den Checkout, falls unter scripts/../ noch keiner liegt
+  (siehe .DESCRIPTION). Default: ein Ordner "ESP-Anwesenheit" neben diesem
+  Skript.
 
 .PARAMETER Port
   Serieller Port des Boards (z.B. COM7), falls die automatische Erkennung
@@ -37,22 +49,33 @@
 
 .EXAMPLE
   .\flash.ps1 -SkipUpload
+
+.EXAMPLE
+  .\flash.ps1 -RepoPath C:\Projekte\ESP-Anwesenheit
 #>
 
 [CmdletBinding()]
 param(
+  [string]$RepoPath,
   [string]$Port,
   [switch]$SkipUpload
 )
 
 $ErrorActionPreference = "Stop"
 
+$RepoUrl = "https://github.com/peterhagelhof7-cmd/ESP-Anwesenheit.git"
+
 # Versionierung dieses Skripts (unabhaengig von der Firmware-Version) -
 # Muster aus dem sensormeter-Projekt uebernommen, siehe docs/entscheidungen.md.
 #
 # Changelog:
+#   1.1.0 (2026-07-30) - Klont das Repository selbst, falls nur flash.ps1
+#                         allein heruntergeladen wurde statt des gesamten
+#                         Checkouts (siehe .DESCRIPTION) - vorher brach das
+#                         Skript in dem Fall mit "platformio.ini nicht
+#                         gefunden" ab, real bei einem Nutzer aufgetreten.
 #   1.0.0 (2026-07-29) - Erste Fassung.
-$FlashScriptVersion = "1.0.0"
+$FlashScriptVersion = "1.1.0"
 
 Write-Host "ESP-Anwesenheit Flash-Skript v$FlashScriptVersion" -ForegroundColor DarkGray
 
@@ -123,11 +146,42 @@ Install-ToolIfMissing -Name "PlatformIO" -Command "pio" -Pattern "PlatformIO Cor
 }
 
 # ------------------------------------------------------------------
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-$firmwarePath = Join-Path $RepoRoot "firmware"
+Write-Step "Pruefe Projekt-Checkout..."
+
+if (-not $RepoPath) {
+  $candidateRoot = Split-Path -Parent $PSScriptRoot
+  if (Test-Path (Join-Path $candidateRoot "firmware\platformio.ini")) {
+    # Normalfall: dieses Skript liegt in scripts/ innerhalb eines
+    # vollstaendigen Checkouts (git clone) - dessen Root verwenden.
+    $RepoPath = $candidateRoot
+  } else {
+    # Nur diese eine Datei wurde heruntergeladen (kein voller Checkout
+    # daneben) - Default-Zielordner neben dem Skript.
+    $RepoPath = Join-Path $PSScriptRoot "ESP-Anwesenheit"
+  }
+}
+
+$firmwarePath = Join-Path $RepoPath "firmware"
+
+if (Test-Path (Join-Path $firmwarePath "platformio.ini")) {
+  Write-Host "Checkout bereits vorhanden unter $RepoPath"
+  $status = git -C $RepoPath status --porcelain
+  if ([string]::IsNullOrWhiteSpace($status)) {
+    Write-Host "Keine lokalen Aenderungen - hole neueste Version (git pull)..."
+    git -C $RepoPath pull
+  } else {
+    Write-Host "Lokale Aenderungen im Checkout gefunden - ueberspringe 'git pull', um nichts zu ueberschreiben." -ForegroundColor Yellow
+  }
+} else {
+  Write-Step "Kein Checkout gefunden - klone Repository nach $RepoPath ..."
+  git clone $RepoUrl $RepoPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "git clone fehlgeschlagen (Exitcode $LASTEXITCODE)"
+  }
+}
 
 if (-not (Test-Path (Join-Path $firmwarePath "platformio.ini"))) {
-  throw "firmware/platformio.ini nicht gefunden unter $firmwarePath - liegt dieses Skript noch in scripts/ innerhalb des ESP-Anwesenheit-Checkouts?"
+  throw "firmware/platformio.ini wurde auch nach dem Checkout nicht gefunden - stimmt -RepoPath ($RepoPath)?"
 }
 
 # ------------------------------------------------------------------
