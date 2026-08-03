@@ -48,6 +48,15 @@ class EventManager {
   bool handleEvent(const String& computer, const String& user, const String& event, const String& logontype,
                     const String& clientTimestamp);
 
+  // Heartbeat vom Client (event="heartbeat"): frischt lastUpdate der Sitzung
+  // auf und legt sie neu an, falls sie nach einem Reboot verschwunden ist -
+  // OHNE einen Ringpuffer-/CSV-Eintrag zu erzeugen (Heartbeats gehoeren nicht
+  // in die Historie, sonst wuerde die Uebersicht zumuellen). state muss
+  // "Lokal" | "RDP" | "Gesperrt" sein (nicht "Loginmaske" - ein laufender
+  // Agent bedeutet, dass jemand angemeldet ist). Liefert false bei leerem
+  // computer oder ungueltigem state (WebServerManager -> HTTP 400).
+  bool heartbeat(const String& computer, const String& user, const String& state);
+
   // Aktueller Status aller bekannten Rechner, alphabetisch nach computer.
   size_t getStatuses(ClientStatus* out, size_t maxCount);
   size_t getStatusCount();

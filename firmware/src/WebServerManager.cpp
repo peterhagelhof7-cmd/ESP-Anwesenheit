@@ -341,6 +341,19 @@ void WebServerManager::handleApiEvent(AsyncWebServerRequest* request) {
   String logontype = doc["logontype"] | "";
   String timestamp = doc["timestamp"] | "";
 
+  // Heartbeat: haelt eine bestehende Sitzung "frisch" (gegen das Stale-Pruning)
+  // bzw. stellt sie nach einem Reboot wieder her - ohne Historie-Eintrag.
+  if (event == "heartbeat") {
+    String state = doc["state"] | "";
+    if (!_events.heartbeat(computer, user, state)) {
+      request->send(400, "application/json",
+                     "{\"ok\":false,\"error\":\"heartbeat: computer fehlt oder state ungueltig\"}");
+      return;
+    }
+    request->send(200, "application/json", "{\"ok\":true}");
+    return;
+  }
+
   if (!_events.handleEvent(computer, user, event, logontype, timestamp)) {
     request->send(400, "application/json",
                    "{\"ok\":false,\"error\":\"computer fehlt oder event unbekannt\"}");

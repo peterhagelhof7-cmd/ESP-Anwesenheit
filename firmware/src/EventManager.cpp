@@ -94,6 +94,21 @@ bool EventManager::handleEvent(const String& computer, const String& user, const
   return true;
 }
 
+bool EventManager::heartbeat(const String& computer, const String& user, const String& state) {
+  if (computer.length() == 0) return false;
+  // Nur die aktiven Sitzungszustaende sind als Heartbeat zulaessig - kein
+  // "Loginmaske" (dann laeuft kein Agent, der einen Heartbeat senden koennte).
+  if (state != "Lokal" && state != "RDP" && state != "Gesperrt") return false;
+
+  time_t now = time(nullptr);
+  xSemaphoreTake(_mutex, portMAX_DELAY);
+  // Frischt lastUpdate auf bzw. legt die Sitzung neu an (z.B. nach Reboot) -
+  // bewusst KEIN Ringpuffer-Eintrag, damit die Historie/CSV nicht zumuellt.
+  applyToStatus(computer, user, state, now);
+  xSemaphoreGive(_mutex);
+  return true;
+}
+
 size_t EventManager::getStatusCount() {
   size_t count;
   xSemaphoreTake(_mutex, portMAX_DELAY);

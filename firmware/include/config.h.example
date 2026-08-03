@@ -8,7 +8,7 @@
 // Werte, die zur Kompilierzeit feststehen muessen.
 // ============================================================================
 
-#define DEVICE_FIRMWARE_VERSION "0.2.0"
+#define DEVICE_FIRMWARE_VERSION "0.3.0"
 
 // Projekt-Kennung fuer die OTA-Herkunftspruefung (siehe OtaManager.h/.cpp,
 // identischer Mechanismus wie in der Sensormeter-Familie) - verhindert, dass

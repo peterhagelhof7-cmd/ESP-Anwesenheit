@@ -4,16 +4,20 @@
 #include "DataManager.h"
 #include "EventManager.h"
 
-// Verdichtet den RAM-Ringpuffer aus EventManager alle 24h in eine
-// persistente logins.csv auf LittleFS (Projektbeschreibung: "alle 24h
-// zusammenfuehren ... welche 14 Tage die Werte haelt, und nach Login auf dem
-// Webserver downloadbar ist"). Die 24h-Uhr laeuft ab Boot (millis()) - nach
-// einem Neustart beginnt sie bewusst neu ("nach einem Neustart beginnt die
-// taegliche Historie neu", siehe Projektbeschreibung.txt): Ereignisse, die
-// zwischen dem letzten Flush und einem Neustart nur im RAM standen, gehen
-// dabei verloren - das ist explizit so spezifiziert, nicht ein Bug. Siehe
-// docs/entscheidungen.md fuer die Abwaegung ("500er-Ringpuffer vs.
-// taeglicher Flush").
+// Verdichtet den RAM-Ringpuffer aus EventManager inkrementell in eine
+// persistente logins.csv auf LittleFS (14 Tage Vorhaltung, nach Login auf dem
+// Webserver downloadbar). Das Flush-Intervall (kFlushIntervalMs) laeuft ab
+// Boot (millis()). Ereignisse, die zwischen dem letzten Flush und einem
+// Neustart nur im RAM standen, gehen verloren - das Intervall bestimmt also
+// das Verlust-Zeitfenster bei einem Reboot.
+//
+// GEAENDERT 2026-08-03: von 24h auf 1h reduziert. Die urspruenglichen 24h
+// (so in Projektbeschreibung.txt / docs/entscheidungen.md beschrieben)
+// bedeuteten in der Praxis, dass die CSV bei jedem Neustart binnen 24h nie
+// geschrieben wurde und die gesamte Historie verloren ging (real beobachtet).
+// Da nur echte Session-Events in die CSV gehen (Heartbeats NICHT), ist
+// haeufigeres Flushen quasi kostenlos fuers Flash. TODO: Projektbeschreibung/
+// entscheidungen.md an diese Revision angleichen.
 class HistoryManager {
  public:
   HistoryManager(EventManager& eventManager, DataManager& dataManager);
@@ -33,7 +37,7 @@ class HistoryManager {
   void clearHistory();
 
  private:
-  static const unsigned long kFlushIntervalMs = 24UL * 60UL * 60UL * 1000UL;
+  static const unsigned long kFlushIntervalMs = 60UL * 60UL * 1000UL;  // 1h (war 24h) - siehe Kommentar oben
   static const int kRetentionDays = 14;
   // Sicherheitsdeckel unabhaengig von der 14-Tage-Regel, falls die Uhr nie
   // synchronisiert (dann kann nach Datum nicht sinnvoll geprueft werden) oder

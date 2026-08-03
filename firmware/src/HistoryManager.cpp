@@ -27,28 +27,49 @@ void HistoryManager::loop() {
 }
 
 void HistoryManager::flushToCsv() {
-  LoginEvent buf[EventManager::RINGBUFFER_SIZE];
-  size_t count = _events.getEventsAfter(_lastFlushedSequence, buf, EventManager::RINGBUFFER_SIZE);
-  if (count == 0) return;
+  // In kleinen Batches abholen statt eines RINGBUFFER_SIZE(=500)-grossen
+  // LoginEvent-Arrays auf dem Stack (~30 KB, Stack-Overflow-Gefahr im
+  // loop()-Task). getEventsAfter liefert nur sequence > _lastFlushedSequence
+  // in chronologischer Reihenfolge - nach jedem Batch ruecken wir
+  // _lastFlushedSequence vor und holen den naechsten.
+  static const size_t kBatch = 32;
+  LoginEvent buf[kBatch];
 
-  bool isNewFile = !LittleFS.exists(kCsvFile);
-  fs::File f = LittleFS.open(kCsvFile, "a");
-  if (!f) {
-    Serial.println("[HISTORY] logins.csv konnte nicht geoeffnet werden (Anhaengen)");
-    return;
+  fs::File f;
+  bool opened = false;
+  size_t total = 0;
+
+  for (;;) {
+    size_t count = _events.getEventsAfter(_lastFlushedSequence, buf, kBatch);
+    if (count == 0) break;
+
+    if (!opened) {
+      bool isNewFile = !LittleFS.exists(kCsvFile);
+      f = LittleFS.open(kCsvFile, "a");
+      if (!f) {
+        Serial.println("[HISTORY] logins.csv konnte nicht geoeffnet werden (Anhaengen)");
+        return;
+      }
+      if (isNewFile) {
+        f.println(kCsvHeader);
+      }
+      opened = true;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+      const LoginEvent& e = buf[i];
+      f.printf("%ld,%s,%s,%s,%s,%s\n", static_cast<long>(e.serverTime), e.computer.c_str(), e.user.c_str(),
+                e.event.c_str(), e.logontype.c_str(), e.clientTimestamp.c_str());
+      _lastFlushedSequence = e.sequence;
+      total++;
+    }
+    if (count < kBatch) break;  // letzter (Teil-)Batch erreicht
   }
-  if (isNewFile) {
-    f.println(kCsvHeader);
-  }
-  for (size_t i = 0; i < count; i++) {
-    const LoginEvent& e = buf[i];
-    f.printf("%ld,%s,%s,%s,%s,%s\n", static_cast<long>(e.serverTime), e.computer.c_str(), e.user.c_str(),
-              e.event.c_str(), e.logontype.c_str(), e.clientTimestamp.c_str());
-    _lastFlushedSequence = e.sequence;
-  }
+
+  if (!opened) return;  // nichts Neues zu schreiben
   f.close();
 
-  _data.pushLogEntry("Historie: " + String(count) + " Ereignis(se) in logins.csv uebernommen",
+  _data.pushLogEntry("Historie: " + String(total) + " Ereignis(se) in logins.csv uebernommen",
                       DataManager::SEVERITY_INFO);
 
   pruneOldRows();

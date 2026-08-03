@@ -160,6 +160,16 @@ function Get-ComputerIdentifier {
 # Sitzung nicht) statt bei jedem Send-AnwesenheitEvent neu abgefragt.
 $script:ComputerIdentifier = Get-ComputerIdentifier
 
+# Aktueller Sitzungszustand aus Serversicht ("Lokal"/"RDP"/"Gesperrt"), vom
+# Client mitgefuehrt und bei jedem Sitzungswechsel unten aktualisiert. Der
+# periodische Heartbeat sendet diesen Zustand mit, damit der Server die
+# Sitzung "frisch" haelt (sonst blendet die Weboberflaeche sie nach ~15 min
+# als "stale" aus und die Firmware entfernt sie nach staleEntryHours) - und
+# sie nach einem Geraete-Reboot automatisch wiederherstellt. Leer = kein
+# aktiver Zustand (z.B. nach logout) -> es wird kein Heartbeat gesendet.
+$script:CurrentState = ""
+$script:HeartbeatIntervalSec = 300  # alle 5 min (UI-Stale-Schwelle liegt bei 15 min)
+
 # Sendet ein Ereignis an den ESP-Anwesenheit-Monitor. Ein Fehlschlag (Geraet
 # nicht erreichbar, WLAN/LAN-Aussetzer, ESP gerade im OTA-Neustart) wird nach
 # einem Retry nur geloggt, nicht weiter eskaliert - der Server haelt seinen
@@ -181,16 +191,23 @@ function Send-AnwesenheitEvent {
     param(
         [Parameter(Mandatory)][string]$EventType,
         [string]$LogonType = "",
+        [string]$State = "",
         [int]$TimeoutSec = 5,
         [int]$MaxAttempts = 2
     )
-    $payload = @{
+    $body = @{
         computer  = $script:ComputerIdentifier
         user      = $env:USERNAME
         event     = $EventType
         logontype = $LogonType
         timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ss")
-    } | ConvertTo-Json -Compress
+    }
+    # Nur fuer "heartbeat" relevant: der Server frischt damit lastUpdate der
+    # Sitzung auf (gegen das Stale-Ausblenden) bzw. stellt sie nach einem
+    # Geraete-Reboot wieder her - ohne einen Historie-Eintrag zu erzeugen
+    # (siehe EventManager::heartbeat in der Firmware).
+    if ($State) { $body.state = $State }
+    $payload = $body | ConvertTo-Json -Compress
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try {
@@ -218,22 +235,32 @@ $script:SessionSwitchHandler = {
     param($senderObj, $e)
     switch ($e.Reason) {
         ([Microsoft.Win32.SessionSwitchReason]::SessionLogon) {
-            Send-AnwesenheitEvent -EventType "login" -LogonType (Get-CurrentLogonType)
+            $lt = Get-CurrentLogonType
+            $script:CurrentState = if ($lt -eq "RDP") { "RDP" } else { "Lokal" }
+            Send-AnwesenheitEvent -EventType "login" -LogonType $lt
         }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLogoff) {
             # Kurzer Timeout, kein Retry - siehe Kommentar an Send-AnwesenheitEvent.
+            $script:CurrentState = ""   # abgemeldet -> ab jetzt kein Heartbeat mehr
             Send-AnwesenheitEvent -EventType "logout" -TimeoutSec 2 -MaxAttempts 1
         }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLock) {
+            $script:CurrentState = "Gesperrt"
             Send-AnwesenheitEvent -EventType "lock"
         }
         ([Microsoft.Win32.SessionSwitchReason]::SessionUnlock) {
-            Send-AnwesenheitEvent -EventType "unlock" -LogonType (Get-CurrentLogonType)
+            $lt = Get-CurrentLogonType
+            $script:CurrentState = if ($lt -eq "RDP") { "RDP" } else { "Lokal" }
+            Send-AnwesenheitEvent -EventType "unlock" -LogonType $lt
         }
         ([Microsoft.Win32.SessionSwitchReason]::RemoteConnect) {
+            $script:CurrentState = "RDP"
             Send-AnwesenheitEvent -EventType "switch-to-rdp" -LogonType "RDP"
         }
         ([Microsoft.Win32.SessionSwitchReason]::RemoteDisconnect) {
+            # Lokale Weiterbenutzung an der Konsole ist die naechste Annahme -
+            # deckt sich mit EventManager::mapEventToState (rdp-disconnect -> Lokal).
+            $script:CurrentState = "Lokal"
             Send-AnwesenheitEvent -EventType "rdp-disconnect" -LogonType "RDP"
         }
         default {
@@ -273,11 +300,21 @@ Write-AgentLog "Agent gestartet (Server: $script:ServerUrl, Rechner: $script:Com
 # Anmeldung (Trigger "Bei Anmeldung", siehe Install-AnwesenheitAgent.ps1) -
 # das zugehoerige SessionLogon-Ereignis liegt zu diesem Zeitpunkt bereits in
 # der Vergangenheit und wuerde ohne diesen expliziten Aufruf nie gemeldet.
-Send-AnwesenheitEvent -EventType "login" -LogonType (Get-CurrentLogonType)
+$script:InitialLogonType = Get-CurrentLogonType
+$script:CurrentState = if ($script:InitialLogonType -eq "RDP") { "RDP" } else { "Lokal" }
+Send-AnwesenheitEvent -EventType "login" -LogonType $script:InitialLogonType
 
+# Periodischer Heartbeat: haelt die Sitzung serverseitig "frisch" (gegen das
+# Stale-Ausblenden), stellt sie nach einem Geraete-Reboot wieder her und
+# dient als zuverlaessiger Fallback fuer ein verpasstes logout (bleiben die
+# Heartbeats aus, entfernt die Firmware die Sitzung nach staleEntryHours).
+# Bewusst KEIN Historie-Eintrag serverseitig (siehe EventManager::heartbeat).
 try {
     while ($true) {
-        Start-Sleep -Seconds 60
+        Start-Sleep -Seconds $script:HeartbeatIntervalSec
+        if ($script:CurrentState) {
+            Send-AnwesenheitEvent -EventType "heartbeat" -State $script:CurrentState
+        }
     }
 } finally {
     [Microsoft.Win32.SystemEvents]::remove_SessionSwitch($script:SessionSwitchHandler)
