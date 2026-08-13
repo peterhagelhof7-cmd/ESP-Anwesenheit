@@ -22,11 +22,33 @@ class OtaManager {
   bool identityMatches() const { return _identityMatches; }
   bool versionAllowed() const { return _versionAllowed; }
 
+  // Handle des Haupt-Loop-Tasks (der in setup() per esp_task_wdt_add(NULL) beim
+  // Task-Watchdog registriert wurde) - muss einmalig in setup() gesetzt werden,
+  // damit er waehrend eines OTA-Uploads gezielt aus dem Watchdog ausgetragen
+  // werden kann (siehe .cpp: OTA-WLAN-/Reboot-Absicherung).
+  void setMainLoopTaskHandle(TaskHandle_t handle) { _mainLoopTaskHandle = handle; }
+
+  // Aus loop() aufzurufen: traegt den Loop-Task wieder in den Watchdog ein, falls
+  // ein Upload abgebrochen wurde (Verbindung abgerissen), ohne dass
+  // endLocalUpdate() je aufgerufen wurde.
+  void checkStalled();
+
  private:
   bool _allowDowngrade = false;
   bool _markerFound = false;
   bool _identityMatches = false;
   bool _versionAllowed = false;
+
+  // OTA-Absicherung (2026-08-14, aus sensormeter-wlan uebernommen): waehrend des
+  // Uploads wird der Haupt-Loop-Task (und die Core-Idle-WDTs) aus dem
+  // Task-Watchdog ausgetragen, sonst loest das Blockieren durch Update.write()
+  // ueber viele Chunks eine Panic-Reaktion aus (Reboot mitten im Upload).
+  TaskHandle_t _mainLoopTaskHandle = nullptr;
+  bool _watchdogDisabledForUpload = false;
+  unsigned long _lastChunkMs = 0;
+  static const unsigned long kStallTimeoutMs = 30000;
+  void disableMainLoopWatchdog();
+  void enableMainLoopWatchdog();
 
   // Rohe Byte-Puffer statt Arduino String: eine .bin enthaelt eingebettete
   // Null-Bytes, an denen String::indexOf() abbrechen wuerde (siehe

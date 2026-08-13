@@ -528,3 +528,44 @@ SSE-Infrastruktur noetig. `font-size: clamp(...)` sorgt fuer sichtbare
 Skalierung mit der Bildschirmbreite (Projektbeschreibung: "Die Seite skaliert
 mit der Aufloesung des Userclients"), Tabellen liegen in `.tablewrap`-Containern
 mit horizontalem Scroll fuer schmale Bildschirme.
+
+## Windows-Client: kein Konsolenfenster (wscript + run-hidden.vbs)
+
+Der Scheduled Task startete den Agenten frueher direkt per
+`powershell.exe -WindowStyle Hidden -File AnwesenheitAgent.ps1`. powershell.exe
+ist eine Konsolen-Anwendung; wird sie vom Task in der interaktiven Sitzung
+gestartet, legt conhost das Fenster an, BEVOR `-WindowStyle Hidden` greift - ein
+leeres schwarzes Fenster blieb die ganze Sitzung offen (der Agent laeuft in einer
+Endlosschleife), und schloss der Benutzer es, endete das Monitoring.
+
+Loesung: Der Task startet jetzt `wscript.exe run-hidden.vbs`. wscript ist eine
+GUI-Subsystem-Anwendung (erzeugt gar kein Konsolenfenster); das VBS startet
+PowerShell mit Fensterstil 0 (unsichtbar) und `bWaitOnReturn = True`, wartet also
+bis der Agent endet. Dadurch bleibt der Task-Prozess so lange am Leben wie der
+Agent (RestartCount-Selbstheilung greift, sauberes Beenden beim Abmelden). Andere
+Wege (PS2EXE `-noConsole`, `conhost --headless` nur Win11, Windows-Dienst in
+Session 0) wurden verworfen: zusaetzliche Build-Abhaengigkeit bzw. Session-0
+bricht die SessionSwitch-/RDP-Erkennung, an der das ganze Modell haengt.
+
+## Windows-Client: Auto-Discovery des ESP (UDP-Broadcast)
+
+Der Client kann den ESP ohne fest eingetragene IP finden. Er sendet beim Start
+einen UDP-Broadcast (`ESP-ANWESENHEIT-DISCOVERY?`, Port 55321) an die gerichteten
+Broadcast-Adressen aller aktiven IPv4-Interfaces + 255.255.255.255; die Firmware
+(`handleDiscovery()` in main.cpp) antwortet dem Absender per Unicast mit einem
+JSON (`ip`/`port`/`path`/`hostname`/`version`). Ergaenzt die schon vorhandene
+mDNS-Namensaufloesung fuer Netze, in denen mDNS/Multicast (UDP 5353) gefiltert
+ist. Port + Anfrage-Kennung sind Protokoll-Konstanten und muessen zwischen
+Firmware (main.cpp) und Client (AnwesenheitAgent.ps1) uebereinstimmen.
+
+Aufloesungs-Reihenfolge im Client: (1) explizit im Installer gesetzte serverUrl;
+(2) sonst UDP-Discovery (Ergebnis wird in %LOCALAPPDATA% gecacht); (3) sonst die
+gecachte URL; (4) sonst der mDNS-Name. Bei wiederholten Sendefehlern sucht der
+Agent im Auto-Modus erneut (robust gegen DHCP-IP-Wechsel) - bewusst nur im
+Heartbeat, nicht im zeitkritischen Logout-Pfad.
+
+Wichtig fuer mehrfach vernetzte Geraete: Das WT32-ETH01 kann gleichzeitig per LAN
+und WLAN in UNTERSCHIEDLICHEN Subnetzen haengen (real beobachtet: LAN
+192.168.77.x, WLAN 192.168.178.x). Die Discovery-Antwort meldet daher die
+Interface-IP im selben /24 wie der Anfragende (Fallback: LAN-Vorrang) - sonst
+bekaeme ein Client die fuer ihn nicht erreichbare "andere" IP.

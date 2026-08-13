@@ -12,9 +12,13 @@
     Install-AnwesenheitAgent.ps1) und laeuft im Kontext des jeweils
     angemeldeten Benutzers, solange die Sitzung besteht.
 
-    Serveradresse kommt aus anwesenheit-client.json im selben Verzeichnis
-    (wird von Install-AnwesenheitAgent.ps1 angelegt) - Default, falls die
-    Datei fehlt: http://esp-anwesenheit.local/event
+    Serveradresse: ist in anwesenheit-client.json (vom Installer angelegt) eine
+    "serverUrl" gesetzt, wird diese verwendet. Ist sie leer/fehlt (Auto-Modus,
+    der neue Installer-Default), findet der Agent den ESP per UDP-Broadcast-
+    Discovery selbst (Invoke-EspDiscovery, Port 55321 - muss zur Firmware
+    passen), cached das Ergebnis in %LOCALAPPDATA% und sucht bei wiederholten
+    Sendefehlern erneut (robust gegen DHCP-IP-Wechsel). Letzter Ausweg, falls
+    kein Geraet antwortet: der mDNS-Name http://esp-anwesenheit.local/event.
 
     Log-Datei liegt bewusst NICHT neben dem Skript (typischerweise
     C:\Program Files\ESP-Anwesenheit\, siehe Install-AnwesenheitAgent.ps1),
@@ -67,19 +71,27 @@ $script:LogDir = Join-Path $env:LOCALAPPDATA "ESP-Anwesenheit"
 New-Item -ItemType Directory -Path $script:LogDir -Force -ErrorAction SilentlyContinue | Out-Null
 $script:LogPath = Join-Path $script:LogDir "client.log"
 $script:MaxLogBytes = 1MB
+# Cache der zuletzt per UDP-Discovery gefundenen URL - bewusst in %LOCALAPPDATA%
+# (nicht neben dem Skript unter Programme, wo der eingeschraenkte Benutzer nicht
+# schreiben darf). Dient als Warmstart-/Fallback, wenn eine Discovery-Runde mal
+# ohne Antwort bleibt (z.B. Geraet gerade im Neustart).
+$script:CachePath = Join-Path $script:LogDir "discovered-url.txt"
 
-function Get-ServerUrl {
+# Explizit vom Installer gesetzte Server-URL (anwesenheit-client.json im
+# Installationsverzeichnis). Leer/fehlend => Auto-Discovery-Modus (siehe
+# Resolve-ServerUrl weiter unten). Die eigentliche URL-Aufloesung passiert erst
+# NACH Write-AgentLog/Invoke-EspDiscovery, weil sie diese benutzt.
+function Get-ConfiguredServerUrl {
     if (Test-Path $script:ConfigPath) {
         try {
             $cfg = Get-Content $script:ConfigPath -Raw | ConvertFrom-Json
             if ($cfg.serverUrl) { return [string]$cfg.serverUrl }
         } catch {
-            # ungueltiges JSON -> auf Default zurueckfallen, kein Absturz
+            # ungueltiges JSON -> wie "nicht gesetzt" behandeln (Auto-Discovery)
         }
     }
-    return "http://esp-anwesenheit.local/event"
+    return ""
 }
-$script:ServerUrl = Get-ServerUrl
 
 # Einfaches Rolling-Log fuer die Diagnose vor Ort (kein Netzwerkzugriff noetig,
 # um zu sehen, ob der Agent ueberhaupt laeuft/sendet) - Datei wird bei
@@ -105,6 +117,113 @@ function Write-AgentLog {
         # schreibgeschuetzt) - Fehler hier wird bewusst verschluckt.
     }
 }
+
+# --- UDP-Auto-Discovery ------------------------------------------------------
+# Findet den ESP-Anwesenheit-Monitor ohne fest eingetragene IP: ein Broadcast
+# mit der Anfrage-Kennung an den Discovery-Port, das Geraet antwortet per
+# Unicast mit einem JSON (ip/port/path). Port + Kennung MUESSEN mit der Firmware
+# uebereinstimmen (firmware/src/main.cpp: kDiscoveryPort/kDiscoveryRequest).
+$script:DiscoveryPort = 55321
+$script:DiscoveryRequest = "ESP-ANWESENHEIT-DISCOVERY?"
+
+# Broadcast-Ziele: gerichtete Broadcast-Adresse jedes aktiven IPv4-Interfaces
+# (aus IP + Subnetzmaske) plus die limitierte Broadcast-Adresse. Deckt auf einem
+# Mehr-NIC-PC alle lokalen Subnetze ab.
+function Get-BroadcastTargets {
+    $set = New-Object System.Collections.Generic.List[string]
+    $set.Add("255.255.255.255") | Out-Null
+    try {
+        foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($ni.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+            if ($ni.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback) { continue }
+            foreach ($ua in $ni.GetIPProperties().UnicastAddresses) {
+                if ($ua.Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+                if (-not $ua.IPv4Mask) { continue }
+                $ipB = $ua.Address.GetAddressBytes()
+                $mB  = $ua.IPv4Mask.GetAddressBytes()
+                if ($mB.Length -ne 4 -or (($mB[0] -bor $mB[1] -bor $mB[2] -bor $mB[3]) -eq 0)) { continue }
+                $bc = New-Object 'System.Byte[]' 4
+                for ($i = 0; $i -lt 4; $i++) { $bc[$i] = [byte]($ipB[$i] -bor (0xFF -bxor $mB[$i])) }
+                $addr = (New-Object System.Net.IPAddress (, $bc)).ToString()
+                if (-not $set.Contains($addr)) { $set.Add($addr) | Out-Null }
+            }
+        }
+    } catch { }
+    return $set
+}
+
+# Sendet den Discovery-Broadcast und wartet auf die Antwort des Geraets.
+# Rueckgabe: fertige Event-URL (z.B. http://192.168.1.50/event) oder $null.
+function Invoke-EspDiscovery {
+    param([int]$TimeoutMs = 1500, [int]$Attempts = 3)
+    $reqBytes = [System.Text.Encoding]::ASCII.GetBytes($script:DiscoveryRequest)
+    $targets = Get-BroadcastTargets
+    for ($a = 1; $a -le $Attempts; $a++) {
+        $udp = $null
+        try {
+            $udp = New-Object System.Net.Sockets.UdpClient
+            $udp.EnableBroadcast = $true
+            foreach ($t in $targets) {
+                try { [void]$udp.Send($reqBytes, $reqBytes.Length, $t, $script:DiscoveryPort) } catch { }
+            }
+            $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+            while ($true) {
+                $remainMs = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+                if ($remainMs -lt 1) { break }
+                $udp.Client.ReceiveTimeout = $remainMs
+                $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+                try { $data = $udp.Receive([ref]$remote) } catch { break }  # Timeout/Fehler
+                try { $obj = ([System.Text.Encoding]::ASCII.GetString($data)) | ConvertFrom-Json } catch { continue }
+                if ($obj.service -eq "esp-anwesenheit" -and $obj.ip) {
+                    $port = if ($obj.port) { [int]$obj.port } else { 80 }
+                    $path = if ($obj.path) { [string]$obj.path } else { "/event" }
+                    $hostpart = if ($port -eq 80) { [string]$obj.ip } else { "$($obj.ip):$port" }
+                    return "http://$hostpart$path"
+                }
+            }
+        } catch {
+        } finally {
+            if ($udp) { $udp.Close() }
+        }
+    }
+    return $null
+}
+
+function Save-DiscoveredUrl {
+    param([string]$Url)
+    try { Set-Content -Path $script:CachePath -Value $Url -Encoding UTF8 -ErrorAction Stop } catch { }
+}
+function Get-CachedUrl {
+    if (Test-Path $script:CachePath) {
+        try {
+            $u = (Get-Content $script:CachePath -Raw -ErrorAction Stop).Trim()
+            if ($u) { return $u }
+        } catch { }
+    }
+    return $null
+}
+
+# Ermittelt die zu verwendende Server-URL:
+#   1. explizit im Installer gesetzt   -> diese (Admin hat die Kontrolle)
+#   2. sonst Auto-Discovery per Broadcast (+ Ergebnis cachen)
+#   3. sonst zuletzt gecachte Discovery-URL
+#   4. sonst mDNS-Hostname als letzter Ausweg
+function Resolve-ServerUrl {
+    if (-not $script:AutoMode) { return $script:ConfiguredUrl }
+    $found = Invoke-EspDiscovery
+    if ($found) { Write-AgentLog "ESP per UDP-Discovery gefunden: $found"; Save-DiscoveredUrl $found; return $found }
+    $cached = Get-CachedUrl
+    if ($cached) { Write-AgentLog "UDP-Discovery ohne Antwort - nutze gecachte URL: $cached"; return $cached }
+    Write-AgentLog "UDP-Discovery ohne Antwort - Fallback auf mDNS-Namen"
+    return "http://esp-anwesenheit.local/event"
+}
+
+$script:ConfiguredUrl = Get-ConfiguredServerUrl
+$script:AutoMode = [string]::IsNullOrWhiteSpace($script:ConfiguredUrl)
+$script:ServerUrl = Resolve-ServerUrl
+# Zaehlt aufeinanderfolgende Sendefehler; loest im Auto-Modus eine erneute
+# Discovery aus (macht den Client robust gegen DHCP-IP-Wechsel des Geraets).
+$script:ConsecutiveFailures = 0
 
 function Get-CurrentLogonType {
     if ([System.Windows.Forms.SystemInformation]::TerminalServerSession) { return "RDP" }
@@ -214,10 +333,12 @@ function Send-AnwesenheitEvent {
             Invoke-RestMethod -Uri $script:ServerUrl -Method Post -Body $payload `
                 -ContentType "application/json" -TimeoutSec $TimeoutSec | Out-Null
             Write-AgentLog "Gesendet: $EventType/$LogonType"
+            $script:ConsecutiveFailures = 0
             return
         } catch {
             if ($attempt -ge $MaxAttempts) {
                 Write-AgentLog "FEHLER beim Senden von $EventType : $($_.Exception.Message)"
+                $script:ConsecutiveFailures++
             } else {
                 Start-Sleep -Seconds 2
             }
@@ -312,6 +433,19 @@ Send-AnwesenheitEvent -EventType "login" -LogonType $script:InitialLogonType
 try {
     while ($true) {
         Start-Sleep -Seconds $script:HeartbeatIntervalSec
+        # Im Auto-Modus nach wiederholten Sendefehlern (z.B. Geraet hat per DHCP
+        # eine neue IP bekommen) neu suchen. Bewusst NUR hier im Heartbeat, NICHT
+        # im zeitkritischen Logout-Pfad (ein Broadcast + Wartezeit waere dort zu
+        # langsam).
+        if ($script:AutoMode -and $script:ConsecutiveFailures -ge 2) {
+            $again = Invoke-EspDiscovery
+            if ($again) {
+                if ($again -ne $script:ServerUrl) { Write-AgentLog "Server-URL per Re-Discovery aktualisiert: $again" }
+                $script:ServerUrl = $again
+                Save-DiscoveredUrl $again
+                $script:ConsecutiveFailures = 0
+            }
+        }
         if ($script:CurrentState) {
             Send-AnwesenheitEvent -EventType "heartbeat" -State $script:CurrentState
         }
